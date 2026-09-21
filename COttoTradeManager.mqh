@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.15"
+#property version   "5.16"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -113,11 +113,18 @@ public:
       double liveAsk = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
       double currentRR = 0.0;
       double desiredSL = trade.currentTrailSL;
+      // Snapshot the stale struct value BEFORE any re-seeding. The single-ticket
+      // push below compares against this, so introducing the session SL can never
+      // by itself manufacture a difference and trigger a spurious broker write.
+      double prevTrailSL = desiredSL;
       // FIX (v5.15): after a T2/T3 ApplyUnifiedSL moved the BASKET stop, the
       // primary struct field (trade.currentTrailSL) lags behind the real
       // ratcheted value. Re-seed from the authoritative session SL so the
       // guards below and the T3 trail block work off the true basket stop.
-      if(m_orderManager.GetBasketCount() > 0 && m_orderManager.GetSessionSL() > 0)
+      // FIX (v5.16): only do this for a MULTI-tranche basket (> 1). On a
+      // single-tranche basket the per-ticket path at the bottom of Update()
+      // owns the stop, and seeding here only caused extra broker writes.
+      if(m_orderManager.GetBasketCount() > 1 && m_orderManager.GetSessionSL() > 0)
          desiredSL = m_orderManager.GetSessionSL();
 
       if(dir == DIR_LONG)
@@ -209,7 +216,10 @@ public:
       double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
       if(m_orderManager.GetBasketCount() <= 1)
         {
-         if(MathAbs(desiredSL - trade.currentTrailSL) > point)
+         // FIX (v5.16): compare against prevTrailSL (the value BEFORE the
+         // session-SL re-seed) so the push reflects genuine local movement
+         // rather than the seeding itself.
+         if(MathAbs(desiredSL - prevTrailSL) > point)
            {
             if(m_orderManager.ModifySL(trade.ticket, desiredSL))
               {

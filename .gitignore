@@ -17,3 +17,6 @@ Thumbs.db
 desktop.ini
 .vscode/
 *.tmp
+_tools/__pycache__/
+*.pyc
+

@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.13"
+#property version   "5.14"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -165,15 +165,24 @@ public:
               m_orderManager.LogGroupStop("Tranche 2 (+2.0R) - Cost-Covering Breakeven", groupBE);
              }
         }
-      // Tranche 3 at +3.0R (InpTrailStartRR): add the 0.06% tranche and hand stop
-      // control to the Dynamic ATR Trail (no fixed 1:3 profit lock in v5.00).
+      // Tranche 3 at +3.0R (InpTrailStartRR): add the 0.06% tranche.
+      // FIX (v5.14): do NOT hand the tight dynamic 'desiredSL' to T3 upon entry.
+      // Two reasons: (1) 'desiredSL' is the ATR trail anchored to high0-1.5*ATR,
+      // which at +3.0R sits very close to market and can be rejected with
+      // INVALID_STOPS or instantly stop the whole basket on a spread spike;
+      // (2) the new ticket would otherwise be opened with sl=0. Instead we pass
+      // the friction-based group breakeven with the fill request, so T3 is
+      // protected from the first tick, and the normal ATR-trail block below
+      // (currentRR >= InpLock3RRR) ratchets it forward on the next tick.
       if(currentRR >= InpTrailStartRR && m_orderManager.IsPyramidPending(3))
         {
-         if(m_orderManager.AddPyramidTranche(3))
-              {
-               m_orderManager.ApplyUnifiedSL(desiredSL);
-               m_orderManager.LogGroupStop("Tranche 3 (+3.0R) - Dynamic ATR Trail", desiredSL);
-              }
+         double beOffset = CalcBasketFriction(dir==DIR_LONG);
+         double safeBE = primaryEntry + (dir==DIR_LONG ? beOffset : -beOffset);
+         if(m_orderManager.AddPyramidTranche(3, safeBE))
+             {
+              m_orderManager.ApplyUnifiedSL(safeBE);
+              m_orderManager.LogGroupStop("Tranche 3 (+3.0R) - Executed (Trail Pending)", safeBE);
+             }
         }
       // Dynamic ATR Trail at +3.0R: apply SAME trailing SL to every ticket
       if(currentRR >= InpLock3RRR)

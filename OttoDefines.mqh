@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.23 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.24 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.23"
-#property description "OTTO v5.23 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes)"
+#property version   "5.24"
+#property description "OTTO v5.24 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -248,7 +248,7 @@ input group "  [8] PROP FIRM SAFETY BUFFERS"
 input group "══════════════════════════════════════════════════"
 input double   SafetyMaxRiskPct    = 1.5;     // Hard abort if risk > this % of account
 input double   SafetyDailyDDLimit  = 3.0;     // Soft breach: pause new orders at this %
-input double   SafetyTotalDDLimit  = 5.0;     // Hard breach: close all + halt at this %
+input double   SafetyTotalDDLimit  = 5.0;     // Hard breach: close all + halt at this % (Trailing)
 // FIX (v5.22): GFT 1% max FLOATING loss. Measured as a TRAILING retracement
 // from the peak-equity high-water mark (not raw balance-vs-equity), so a
 // routine intraday dip while equity is still below its own peak cannot trip

@@ -1,15 +1,21 @@
 """
-Logic verification for the v5.22 prop-firm safety rules.
+Logic verification for the v5.22 / v5.24 prop-firm safety rules.
 
 Covers the change a compile CANNOT validate: the GFT drawdown arithmetic.
   * 3% daily DD measured from the 5PM-EST (broker midnight) reset balance
-  * 5% TRAILING total DD measured from the peak CLOSED balance
-  * 1% floating loss as a TRAILING retracement from peak EQUITY
+  * 5% TRAILING total DD measured from the peak EQUITY high-water mark
+    (v5.22 used peak CLOSED balance; v5.24 switched it to peak equity)
+  * 1% floating loss as a TRAILING retracement from that same peak EQUITY
 
 The floating rule is the important one. A raw (balance - equity)/balance
 ratio trips on any routine dip while equity is below its own peak, which
 would permanently halt the EA on an ordinary tick. The trailing measure
 must NOT fire in that situation -- that difference is pinned below.
+
+v5.24 NOTE: because total_dd and floating_trailing now share one equity
+basis, they evaluate the SAME quantity. The 1% threshold is strictly
+tighter, so it fires first and the 5% trailing check is a backstop. That
+interaction is pinned in `-- Rule interaction` at the end.
 """
 
 
@@ -19,7 +25,15 @@ def daily_dd(reset_balance, equity):
     return 100.0 * (reset_balance - equity) / reset_balance
 
 
-def total_dd(hwm_balance, equity):
+def total_dd(equity_hwm, equity):
+    """v5.24 measure: retracement from peak EQUITY (was peak closed balance)."""
+    if equity_hwm <= 0:
+        return 0.0
+    return 100.0 * (equity_hwm - equity) / equity_hwm
+
+
+def total_dd_balance_basis(hwm_balance, equity):
+    """The v5.22 measure, retained to document what changed and why."""
     if hwm_balance <= 0:
         return 0.0
     return 100.0 * (hwm_balance - equity) / hwm_balance
@@ -56,7 +70,7 @@ SAFETY_DAILY, SAFETY_TOTAL, SAFETY_FLOAT = 3.0, 5.0, 1.0
 
 def main():
     print("=" * 78)
-    print("v5.22 PROP-FIRM SAFETY RULE VERIFICATION")
+    print("v5.22 / v5.24 PROP-FIRM SAFETY RULE VERIFICATION")
     print("=" * 78)
     ok = True
 
@@ -73,7 +87,7 @@ def main():
     ok &= check("zero reset balance guard -> 0.0", daily_dd(0, 97000), 0.0)
 
     # ---- 5% Trailing Total DD --------------------------------------------
-    print("\n-- 5% Trailing Total Drawdown (peak CLOSED balance) --")
+    print("\n-- 5% Trailing Total Drawdown (peak EQUITY, v5.24 basis) --")
     # Account grew 100000 -> 110000; a 5% trail from 110000 is 104500.
     ok &= checkf("equity 104500 from peak 110000 -> 5.0000%",
                  total_dd(110000, 104500), 5.0)
@@ -90,6 +104,32 @@ def main():
     # A new equity high raises the trail.
     ok &= check("equity 110000 at peak -> 0% drawdown", total_dd(110000, 110000), 0.0)
     ok &= check("zero hwm guard -> 0.0", total_dd(0, 50000), 0.0)
+
+    # v5.24: the basis moved from peak CLOSED balance to peak EQUITY. Pin the
+    # divergence so the distinction cannot silently regress either way. A book
+    # that peaked at 110000 closed and now carries an open loss shows equity
+    # below balance; the equity basis is the more conservative of the two.
+    print("\n-- v5.24 basis change: peak equity vs peak closed balance --")
+    # Both bases read identically when equity IS the peak (nothing open).
+    ok &= checkf("flat account: both bases agree -> 0.5000%",
+                 total_dd(110000, 109450), total_dd_balance_basis(110000, 109450))
+    # Balance 110000 closed, then a position opens and equity drops to 109100.
+    # The balance basis is blind to the intraday excursion; the equity basis
+    # trails the true high and reports the real give-back.
+    ok &= checkf("balance basis (blind) 110000/109100 -> 0.8182%",
+                 total_dd_balance_basis(110000, 109100), 0.8181818181818181)
+    ok &= checkf("equity basis (trail) 110000/109100 -> 0.8182%",
+                 total_dd(110000, 109100), 0.8181818181818181)
+    # Equity ratcheted to 115000 intraday before closing back at 110000. The
+    # balance basis forgets that peak entirely; the equity basis remembers it.
+    ok &= checkf("equity-basis remembers intraday 115000 peak -> 8.6957%",
+                 total_dd(115000, 105000), 8.695652173913045)
+    ok &= checkf("balance-basis forgets it -> 4.5455%",
+                 total_dd_balance_basis(110000, 105000), 4.545454545454545)
+    ok &= check("equity basis fires where balance basis would NOT",
+                total_dd(115000, 105000) >= SAFETY_TOTAL, True)
+    ok &= check("...and balance basis misses the same book",
+                total_dd_balance_basis(110000, 105000) >= SAFETY_TOTAL, False)
 
     # ---- 1% Trailing Floating Loss (the contested rule) -------------------
     print("\n-- 1% Floating Loss: TRAILING from peak equity --")
@@ -168,12 +208,39 @@ def main():
     ok &= checkf("floating measured 3.1000%", f2, 3.1)
     ok &= checkf("daily measured 3.1000%", d2, 3.1)
 
+    # ---- Rule interaction (v5.24) -----------------------------------------
+    print("\n-- v5.24 rule interaction: 1% floating vs 5% trailing on one basis --")
+    # With both rules on the equity HWM they compute the SAME quantity, so the
+    # tighter 1% threshold always trips first and the 5% check is a backstop.
+    # Pin that outcome explicitly rather than leaving it implicit.
+    for eq in (100000, 109000, 99000, 95000, 94000):
+        f = floating_trailing(100000, eq)
+        t = total_dd(100000, eq)
+        ok &= checkf("  equity %d: floating == trailing (shared basis)" % eq, f, t)
+
+    eq = 99000  # exactly 1% below the 100000 peak
+    f, t = floating_trailing(100000, eq), total_dd(100000, eq)
+    ok &= check("1% floating breaches here", f >= SAFETY_FLOAT, True)
+    ok &= check("5% trailing does NOT breach at the same give-back",
+                t >= SAFETY_TOTAL, False)
+    ok &= check("...so the floating branch fires first (as coded)",
+                (f >= SAFETY_FLOAT) and not (t >= SAFETY_TOTAL), True)
+
+    # The 5% check is reachable only if the 1% input is raised above 5%.
+    eq = 94500  # 5.5% below peak
+    f, t = floating_trailing(100000, eq), total_dd(100000, eq)
+    ok &= check("at 5.50% both thresholds breached", (f >= 5.0, t >= SAFETY_TOTAL),
+                (True, True))
+    ok &= checkf("floating reads 5.5000%", f, 5.5)
+    ok &= checkf("trailing reads the same 5.5000%", t, 5.5)
+
     print()
     print("=" * 78)
     print("RESULT:", "ALL CHECKS PASSED" if ok else "FAILURES PRESENT")
     print("=" * 78)
     print()
     print("Threshold implemented: peak-equity give-back >= 1.00% halts the EA.")
+    print("v5.24: 5% trailing DD shares that equity basis and acts as a backstop.")
     return 0 if ok else 1
 
 

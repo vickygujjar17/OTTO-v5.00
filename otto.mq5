@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.23)            |
+//|                    Pine Script Master Build Port (v5.24)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.23"
+#property version   "5.24"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -67,8 +67,13 @@ datetime g_lastBarTime      = 0;
 // --- Prop Firm Safety State ---
 double   g_initialBalance      = 0;
 double   g_dailyResetBalance   = 0;  // Resets at 00:00 Server Time (5:00 PM EST)
-double   g_highWaterMarkBalance= 0;  // Tracks highest CLOSED balance for Trailing Drawdown
-double   g_equityHighWaterMark = 0;  // Tracks highest EQUITY for the trailing floating-loss rule
+// FIX (v5.24): single equity high-water mark. Trailing total DD previously
+// trailed the peak CLOSED balance in g_highWaterMarkBalance; it now trails
+// peak EQUITY, so both the 5% trailing DD and the 1% floating rule share this
+// one basis. g_highWaterMarkBalance was removed rather than left stale.
+// Consequence: with both rules on the same basis, the 1% rule is strictly
+// tighter and fires first; the 5% check remains as a documented backstop.
+double   g_equityHighWaterMark = 0;  // Tracks highest all-time EQUITY for Trailing Drawdown
 datetime g_lastMidnightCheck   = 0;
 bool     g_dailyDD_Paused      = false;
 bool     g_totalDD_Halted      = false;
@@ -82,7 +87,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.23 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.24 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -192,9 +197,9 @@ int OnInit(void)
    // --- Prop firm safety state ---
    g_initialBalance       = AccountInfoDouble(ACCOUNT_BALANCE);
    g_dailyResetBalance    = g_initialBalance;
-   g_highWaterMarkBalance = g_initialBalance;
-   // FIX (v5.23): trailing 1% floating-rule basis. Must be seeded here or the
-   // rule's peak-equity comparison has no baseline on the first tick.
+   // FIX (v5.23): trailing rule basis. Must be seeded here or the peak-equity
+   // comparison has no baseline on the first tick. FIX (v5.24): this single
+   // HWM now backs BOTH the 5% trailing DD and the 1% floating rule.
    g_equityHighWaterMark  = AccountInfoDouble(ACCOUNT_EQUITY);
    g_dailyDD_Paused       = false;
    g_totalDD_Halted       = false;
@@ -203,7 +208,8 @@ int OnInit(void)
    // form carried the live HH:MM:SS, so the != guard below fired on every tick.
    g_lastMidnightCheck    = iTime(_Symbol, PERIOD_D1, 0);
    Print("[Safety] Init Balance: ", DoubleToString(g_initialBalance, 2),
-         " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD: ", SafetyTotalDDLimit,
+         " | Equity HWM: ", DoubleToString(g_equityHighWaterMark, 2),
+         " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD(trailing): ", SafetyTotalDDLimit,
          "% | Floating: ", SafetyMaxFloatingLoss, "%");
    Print("[Safety] Daily reset anchor: ", TimeToString(g_lastMidnightCheck, TIME_DATE|TIME_MINUTES));
 
@@ -430,24 +436,24 @@ void OnTick(void)
    if(!g_dailyDD_Paused && !g_totalDD_Halted)
      {
       double equity         = AccountInfoDouble(ACCOUNT_EQUITY);
-      double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
-      // Trailing high-water marks. The total-DD limit trails the highest
-      // CLOSED balance (GFT measures total DD against peak account value);
-      // the floating rule trails the highest EQUITY so it reacts to open
-      // P&L. Both only ever ratchet UP, never down.
-      if(currentBalance > g_highWaterMarkBalance)
-         g_highWaterMarkBalance = currentBalance;
+      // FIX (v5.24): single equity high-water mark. The trailing total-DD limit
+      // previously trailed the peak CLOSED balance; it now trails peak EQUITY,
+      // matching GFT's all-time-equity trailing drawdown and sharing one basis
+      // with the 1% floating rule. Only ratchets UP, never down.
       if(equity > g_equityHighWaterMark)
          g_equityHighWaterMark = equity;
 
       double dailyDD = (g_dailyResetBalance > 0) ? 100.0 * (g_dailyResetBalance - equity) / g_dailyResetBalance : 0;
-      double totalDD = (g_highWaterMarkBalance > 0) ? 100.0 * (g_highWaterMarkBalance - equity) / g_highWaterMarkBalance : 0;
+      double totalDD = (g_equityHighWaterMark > 0) ? 100.0 * (g_equityHighWaterMark - equity) / g_equityHighWaterMark : 0;
       // FIX (v5.22): trailing floating-loss measure. A plain balance-vs-equity
       // ratio fires on any routine dip while equity sits below its own peak,
       // permanently halting the EA on a normal tick. Measuring the retracement
       // from PEAK EQUITY instead means the rule only trips on a genuine 1%
       // give-back from the equity high-water mark.
+      // NOTE (v5.24): totalDD and floatingLoss now evaluate the same quantity.
+      // The 1% threshold is strictly tighter, so this branch fires first and the
+      // 5% trailing check below acts as a backstop if the 1% input is raised.
       double floatingLoss = (g_equityHighWaterMark > 0)
                             ? 100.0 * (g_equityHighWaterMark - equity) / g_equityHighWaterMark
                             : 0;
@@ -494,7 +500,7 @@ void OnTick(void)
             g_orderManager.CloseEntireBasket("Total Trailing DD Halt");
          Print("==============================================================");
          Print("  FATAL: TOTAL TRAILING DRAWDOWN LIMIT REACHED — EA PERMANENTLY HALTED");
-         Print("  HWM: ", DoubleToString(g_highWaterMarkBalance, 2),
+         Print("  Equity HWM: ", DoubleToString(g_equityHighWaterMark, 2),
                " | Equity: ", DoubleToString(equity, 2));
          Print("  DD: ", DoubleToString(totalDD, 2), "% >= ", SafetyTotalDDLimit, "%");
          Print("==============================================================");

@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.18"
+#property version   "5.19"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -507,7 +507,131 @@ private:
      }
 
 
-   bool                    FindActivePosition(ulong &outTicket, ENUM_TRADE_DIRECTION &outDir)
+   //+------------------------------------------------------------------+
+   //| 3-TIER FILL DETECTION                                            |
+   //|                                                                  |
+   //| MT5 hedging mode gives a filled limit order a position ticket    |
+   //| unrelated to the order ticket, so resolve it by three sequential |
+   //| fallbacks, cheapest and most reliable first:                     |
+   //|                                                                  |
+   //|   TIER 1  PositionSelectByTicket(pending order ticket)           |
+   //|           Valid when the broker reuses the order id as position  |
+   //|           id (common on MT5 netting-style fills).                |
+   //|                                                                  |
+   //|   TIER 2  Deal history -> DEAL_POSITION_ID                       |
+   //|           Authoritative: find the IN deal whose DEAL_ORDER is    |
+   //|           the pending order and take its DEAL_POSITION_ID.       |
+   //|                                                                  |
+   //|   TIER 3  Magic+symbol scan EXCLUDING the currently tracked      |
+   //|           ticket. Last resort, but also the only tier that       |
+   //|           cannot return a stale pyramiding tranche.              |
+   //|                                                                  |
+   //| excludeTicket is the position already tracked; passing it makes  |
+   //| every tier refuse to re-adopt the incumbent position.            |
+   //+------------------------------------------------------------------+
+   bool                    ResolveFilledPositionTicket(ulong orderTicket,
+                                                       ulong excludeTicket,
+                                                       ulong &outTicket,
+                                                       ENUM_TRADE_DIRECTION &outDir)
+     {
+      outTicket = 0; outDir = DIR_NONE;
+      if(orderTicket <= 0) return false;
+
+      // ---- TIER 1: position ticket == pending order ticket -------------
+      // Guarded by excludeTicket for the same reason TIER 2 and TIER 3 are:
+      // if the incumbent position happens to share the id of a DIFFERENT
+      // pending order, echoing it back would mask a genuine reversal fill.
+      if(orderTicket != excludeTicket && PositionSelectByTicket(orderTicket))
+        {
+         if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+            PositionGetString(POSITION_SYMBOL) == m_symbol)
+           {
+            outTicket = (ulong)PositionGetInteger(POSITION_TICKET);
+            outDir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                     ? DIR_LONG : DIR_SHORT;
+            if(EnableLogging)
+               Print("[OrderManager] FILL TIER 1: position id matched order ticket ",
+                     orderTicket);
+            return true;
+           }
+        }
+
+      // ---- TIER 2: history -> DEAL_POSITION_ID ------------------------
+      // Scope the query tightly to avoid scanning the whole account book.
+      datetime from = TimeCurrent() - 7 * 24 * 60 * 60;
+      if(HistorySelect(from, TimeCurrent() + 60))
+        {
+         int deals = HistoryDealsTotal();
+         // Walk newest-first: the fill we care about is the most recent.
+         for(int d = deals - 1; d >= 0; d--)
+           {
+            ulong dt = HistoryDealGetTicket(d);
+            if(dt <= 0) continue;
+            if(HistoryDealGetInteger(dt, DEAL_ORDER) != (long)orderTicket) continue;
+            if(HistoryDealGetInteger(dt, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+            if(HistoryDealGetString(dt, DEAL_SYMBOL) != m_symbol) continue;
+            if(HistoryDealGetInteger(dt, DEAL_MAGIC) != MagicNumber) continue;
+
+            ulong posId = (ulong)HistoryDealGetInteger(dt, DEAL_POSITION_ID);
+            if(posId <= 0) continue;
+            if(excludeTicket > 0 && posId == excludeTicket) continue;
+
+            if(PositionSelectByTicket(posId) &&
+               PositionGetString(POSITION_SYMBOL) == m_symbol &&
+               PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+              {
+               outTicket = posId;
+               outDir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                        ? DIR_LONG : DIR_SHORT;
+               if(EnableLogging)
+                  Print("[OrderManager] FILL TIER 2: history resolved order ",
+                        orderTicket, " -> position ", posId);
+               return true;
+              }
+           }
+        }
+
+      // ---- TIER 3: magic+symbol scan, excluding the tracked ticket -----
+      // Newest position wins so a fresh fill cannot be confused with an
+      // older pyramid tranche of the same basket.
+      ulong    bestTicket = 0;
+      datetime bestTime   = 0;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+         ulong pt = PositionGetTicket(i);
+         if(pt <= 0 || !PositionSelectByTicket(pt)) continue;
+         if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(excludeTicket > 0 && pt == excludeTicket) continue;
+
+         datetime opened = (datetime)PositionGetInteger(POSITION_TIME);
+         if(opened >= bestTime)
+           {
+            bestTime   = opened;
+            bestTicket = pt;
+           }
+        }
+      if(bestTicket > 0)
+        {
+         outTicket = bestTicket;
+         outDir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                  ? DIR_LONG : DIR_SHORT;
+         if(EnableLogging)
+            Print("[OrderManager] FILL TIER 3: magic/symbol scan found position ",
+                  bestTicket, " (excluded tracked=", excludeTicket, ")");
+         return true;
+        }
+
+      return false;
+     }
+
+   //+------------------------------------------------------------------+
+   //| Scans live positions for our Magic+symbol. excludeTicket lets a  |
+   //| caller refuse to re-adopt the position it already tracks, which  |
+   //| is what stops a pyramid tranche being mistaken for a new fill.   |
+   //+------------------------------------------------------------------+
+   bool                    FindActivePosition(ulong &outTicket, ENUM_TRADE_DIRECTION &outDir,
+                                             ulong excludeTicket = 0)
      {
       outTicket = 0; outDir = DIR_NONE;
       for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -517,7 +641,9 @@ private:
             if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
                PositionGetString(POSITION_SYMBOL) == m_symbol)
               {
-               outTicket = PositionGetInteger(POSITION_TICKET);
+               ulong pt = (ulong)PositionGetInteger(POSITION_TICKET);
+               if(excludeTicket > 0 && pt == excludeTicket) continue;
+               outTicket = pt;
                long posType = PositionGetInteger(POSITION_TYPE);
                outDir = (posType == POSITION_TYPE_BUY) ? DIR_LONG : DIR_SHORT;
                return true;
@@ -954,10 +1080,44 @@ private:
             continue;
 
          // Order is gone — filled, canceled, or expired.
+         // ---- STEP 1: 3-TIER FILL DETECTION -----------------------------
+         // excludeTicket = the position we already track, so no tier can
+         // re-adopt the incumbent and mask a genuine reversal fill.
+         ulong tracked = m_hasActiveTrade ? m_activeTrade.ticket : 0;
          ulong newTicket; ENUM_TRADE_DIRECTION newDir;
-         if(FindActivePosition(newTicket, newDir))
+         if(ResolveFilledPositionTicket(ticket, tracked, newTicket, newDir))
            {
-            // FILLED — but only if this position is new (avoid double seed)
+            // ---- STEP 2: STOP-AND-REVERSE ------------------------------
+            // MT5 hedging mode ADDS the new position instead of offsetting
+            // the old leg, so an opposite-side fill leaves both baskets
+            // live. Close the incumbent basket first, then adopt the new
+            // position. m_reversalInProgress suppresses the double-log in
+            // SyncActiveTrade() so the exit is recorded exactly once.
+            if(m_hasActiveTrade && m_activeTrade.ticket != newTicket)
+              {
+               if(EnableLogging)
+                  Print("[OrderManager] SAR REVERSAL: closing opposing basket ",
+                        "(tracked=", m_activeTrade.ticket,
+                        " dir=", (m_activeDirection == DIR_LONG ? "LONG" : "SHORT"),
+                        ") -> new=", newTicket,
+                        " dir=", (newDir == DIR_LONG ? "LONG" : "SHORT"));
+
+               bool wasReversing    = m_reversalInProgress;
+               m_reversalInProgress = true;
+               // logExit=false: closing deals need a tick to settle, and
+               // SyncActiveTrade() re-logs the aggregate once flat.
+               // keepTicket=newTicket: the orphan sweep inside must NOT
+               // close the position we are reversing INTO. Without it the
+               // sweep would shut the new fill on the same tick it appears.
+               CloseEntireBasket("SAR Reversal", false, newTicket);
+               m_reversalInProgress = wasReversing;
+
+               if(EnableLogging)
+                  Print("[OrderManager] SAR REVERSAL complete: opposing basket closed");
+              }
+
+            // ---- STEP 3: ADOPT THE NEW TRADE ---------------------------
+            // The ticket differs (or there was no active trade), so seed.
             if(!m_hasActiveTrade || m_activeTrade.ticket != newTicket)
               {
                SeedActiveTradeFromBlock(blocks[i], newTicket);
@@ -1071,13 +1231,18 @@ public:
    void              SyncActiveTrade(void)
      {
       ulong ticket; ENUM_TRADE_DIRECTION dir;
-      if(FindActivePosition(ticket, dir))
+      ulong tracked = m_hasActiveTrade ? m_activeTrade.ticket : 0;
+      if(FindActivePosition(ticket, dir, tracked))
         {
          SeedActiveTradeFromPosition(ticket);
         }
-      else
+      else if(!FindActivePosition(ticket, dir))
         {
-         // active -> flat transition = trade closed
+         // No position at all -> active -> flat transition = trade closed.
+         // The second call ignores `tracked` so a closed incumbent is
+         // correctly reported flat rather than re-seeded from a tranche.
+         // Suppressed while a reversal is in flight: the reversal owns the
+         // logging and re-logs the aggregate once (m_reversalInProgress).
          if(m_hasActiveTrade && !m_reversalInProgress)
             LogClosedTrade(m_activeTrade);
          if(m_reversalInProgress) m_reversalInProgress = false;
@@ -1282,7 +1447,7 @@ public:
            string tsF = StringFormat("%04d%02d%02d-%02d%02d%02d", utm2.year, utm2.mon, utm2.day, utm2.hour, utm2.min, utm2.sec);
            m_sessionID = StringFormat("#OTTO-%s-%s-BLK%d", m_symbol, tsF, blockSerial);
           }
-      // FIX (v5.18): ArrayResize(m_basket, 0, 3) above leaves the array at
+      // FIX (v5.19): ArrayResize(m_basket, 0, 3) above leaves the array at
       // ZERO length, and m_basketCount was reset to 0 - so the write below
       // indexed [0] of an empty array and faulted ("array out of range").
       // Grow first, exactly as AddPyramidTranche already does. Harmless when
@@ -1378,7 +1543,7 @@ public:
 
    void              ApplyUnifiedSL(double newSL)
      {
-      // FIX (v5.18): make the "no direction yet" case EXPLICIT. Previously
+      // FIX (v5.19): make the "no direction yet" case EXPLICIT. Previously
       // DIR_NONE fell through to the SHORT branch below, where the test
       // "newSL >= m_sessionSL" is trivially true for any positive price when
       // m_sessionSL is still 0.0 - so the call silently did nothing. That was
@@ -1488,7 +1653,8 @@ public:
    //| settle in history first (e.g. a reversal, which re-logs the      |
    //| aggregate via SyncActiveTrade on a later tick).                  |
    //+------------------------------------------------------------------+
-   void              CloseEntireBasket(string reason = "Force Close", bool logExit = true)
+   void              CloseEntireBasket(string reason = "Force Close", bool logExit = true,
+                                       ulong keepTicket = 0)
      {
       if(!m_hasActiveTrade && m_basketCount == 0 && CountMyPositions() == 0)
          return;
@@ -1500,6 +1666,7 @@ public:
         {
          ulong bt = m_basket[b].ticket;
          if(bt <= 0) continue;
+         if(keepTicket > 0 && bt == keepTicket) continue;
          if(!PositionSelectByTicket(bt)) continue;
          if(ClosePosition(bt)) closed++;
         }
@@ -1507,6 +1674,8 @@ public:
       // ---- 2. Orphan sweep (untracked positions for this magic) -----
       // Guards against baskets rebuilt incomplete after a restart, or a
       // tranche that opened between the last Update() and this call.
+      // keepTicket is spared so a stop-and-reverse can close the outgoing
+      // basket WITHOUT also closing the incoming fill it detected.
       for(int p = PositionsTotal() - 1; p >= 0; p--)
         {
          if(!PositionGetTicket(p)) continue;
@@ -1514,6 +1683,7 @@ public:
          if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
          ulong orphan = (ulong)PositionGetInteger(POSITION_TICKET);
          if(orphan <= 0) continue;
+         if(keepTicket > 0 && orphan == keepTicket) continue;
          if(ClosePosition(orphan)) closed++;
         }
 

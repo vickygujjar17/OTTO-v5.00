@@ -5,7 +5,7 @@
 //|              Suffix-safe (handles broker suffixes like .x)        |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.11"
+#property version   "5.12"
 
 #ifndef __OTTO_CORRELATION_FILTER__
 #define __OTTO_CORRELATION_FILTER__
@@ -198,10 +198,13 @@ public:
 
    //+------------------------------------------------------------------+
    //| BroadcastBias — write bias to MT5 Global Variable                |
+   //| Key is built from the SANITIZED root so that EURUSD.x, EURUSDm   |
+   //| and EURUSD all publish to the same "TS_Bias_EURUSD" slot.        |
    //+------------------------------------------------------------------+
    void              BroadcastBias(int bias)
      {
-      string varName = "TS_Bias_" + CleanSymbol(m_symbol);   // Key shared across EA instances
+      string cleanSym = CleanSymbol(m_symbol);
+      string varName = "TS_Bias_" + cleanSym;   // Key shared across EA instances
       if(bias == 0)
          GlobalVariableDel(varName);
       else
@@ -210,18 +213,22 @@ public:
 
    //+------------------------------------------------------------------+
    //| MODULE 3: GetWeightedBiasSum — matrix-weighted peer bias sum     |
+   //| Reads "TS_Bias_<root>" slots published by peer EA instances.     |
+   //| INVARIANT: m_allSymbols[] is stored pre-sanitized by the ctor,   |
+   //| so array entries can be compared/used directly without cleaning. |
    //+------------------------------------------------------------------+
    int               GetWeightedBiasSum(void)
      {
       int totalBias = 0;
+      string myClean = CleanSymbol(m_symbol);
       for(int i = 0; i < ArraySize(m_allSymbols); i++)
         {
-         if(CleanSymbol(m_allSymbols[i]) == CleanSymbol(m_symbol)) continue;
+         if(m_allSymbols[i] == myClean) continue;
          string varName = "TS_Bias_" + m_allSymbols[i];
          if(GlobalVariableCheck(varName))
            {
             int peerBias = (int)GlobalVariableGet(varName);
-            int score = GetCorrelationScore(m_symbol, m_allSymbols[i]);
+            int score = GetCorrelationScore(myClean, m_allSymbols[i]);
             totalBias += peerBias * score;
            }
         }

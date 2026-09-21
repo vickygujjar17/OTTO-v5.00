@@ -1,10 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                        COttoCorrelationFilter.mqh |
 //|              MODULE — Weighted Correlation Matrix (-3 to +3)      |
-//|              OTTO EA — Institutional portfolio filter            |
+//|              28-Pair + Gold Institutional portfolio filter        |
+//|              Suffix-safe (handles broker suffixes like .x)        |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.01"
+#property version   "5.11"
 
 #ifndef __OTTO_CORRELATION_FILTER__
 #define __OTTO_CORRELATION_FILTER__
@@ -13,7 +14,8 @@
 
 //+------------------------------------------------------------------+
 //| COttoCorrelationFilter class                                     |
-//| Weighted -3 to +3 correlation matrix for 12 pairs.               |
+//| Component-decomposition correlation engine for 28 FX pairs + gold |
+//| Suffix-safe: broker suffixes (.x, m, _i, etc.) are sanitized.     |
 //| Veto threshold: |score| >= 2.                                    |
 //| Hive Mind tie-breaker: Total >= 2 or <= -2, else delete both.    |
 //+------------------------------------------------------------------+
@@ -24,218 +26,77 @@ private:
    string            m_allSymbols[];
 
    //+------------------------------------------------------------------+
-   //| MODULE 1: GetCorrelationScore — weighted -3 to +3 matrix lookup  |
+   //| CleanSymbol — strip broker suffix/prefix, return 6-char FX root  |
+   //| Gold is normalized to "XAUUSD" so XAUUSD.x / GOLD.x all agree.    |
+   //| NOTE: extracts A-Z only; intended for the FX + gold universe.     |
+   //+------------------------------------------------------------------+
+   string            CleanSymbol(string sym)
+     {
+      StringToUpper(sym);
+      if(StringFind(sym, "XAUUSD") >= 0 || StringFind(sym, "GOLD") >= 0) return "XAUUSD";
+
+      string base = "";
+      int len = StringLen(sym);
+      for(int i = 0; i < len; i++)
+        {
+         ushort ch = StringGetCharacter(sym, i);
+         if(ch >= 'A' && ch <= 'Z') base += ShortToString(ch);
+         if(StringLen(base) == 6) break;
+        }
+      return base;
+     }
+
+   //+------------------------------------------------------------------+
+   //| MODULE 1: GetCorrelationScore — dynamic Base/Quote decomposition |
+   //| Score is built from currency exposure, not a hardcoded ladder.    |
+   //|   +2 shared base / shared quote   (same-term, moves together)     |
+   //|   -2 inverted base/quote          (opposite-term, moves against)  |
+   //|   +1 macro regional bloc, applied ONLY when no direct exposure    |
+   //| Returns 0 when the two symbols sanitize to the same root.         |
    //+------------------------------------------------------------------+
    int               GetCorrelationScore(string sym1, string sym2)
      {
-      if(sym1 == sym2) return 0;
+      string s1 = CleanSymbol(sym1);
+      string s2 = CleanSymbol(sym2);
+      if(s1 == s2) return 0;
 
-      // --- EURUSD ---
-      if(sym1 == "EURUSD")
+      // Handle Gold exception
+      if(s1 == "XAUUSD" || s2 == "XAUUSD")
         {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return 2;
-         if(sym2 == "GBPUSD") return 2;
-         if(sym2 == "USDJPY") return -1;
-         if(sym2 == "AUDUSD") return 2;
-         if(sym2 == "NZDUSD") return 2;
-         if(sym2 == "USDCHF") return -3;
-         if(sym2 == "USDCAD") return -1;
-         if(sym2 == "EURJPY") return 1;
-         if(sym2 == "GBPJPY") return 0;
-         if(sym2 == "EURCHF") return 2;
-         if(sym2 == "AUDJPY") return 1;
+         string other = (s1 == "XAUUSD") ? s2 : s1;
+         if(StringFind(other, "USD") == 3) return 2;  // e.g. EURUSD
+         if(StringFind(other, "USD") == 0) return -2; // e.g. USDJPY
          return 0;
         }
 
-      // --- GBPUSD ---
-      if(sym1 == "GBPUSD")
+      string base1  = StringSubstr(s1, 0, 3);
+      string quote1 = StringSubstr(s1, 3, 3);
+      string base2  = StringSubstr(s2, 0, 3);
+      string quote2 = StringSubstr(s2, 3, 3);
+
+      int score = 0;
+
+      // 1. Direct Exposure Engine
+      if(base1 == base2)   score += 2;
+      if(quote1 == quote2) score += 2;
+      if(base1 == quote2)  score -= 2;
+      if(quote1 == base2)  score -= 2;
+
+      // 2. Macro Regional Bloc Engine (Only applies if no direct exposure exists)
+      if(score == 0)
         {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return 1;
-         if(sym2 == "EURUSD") return 2;
-         if(sym2 == "USDJPY") return -1;
-         if(sym2 == "AUDUSD") return 1;
-         if(sym2 == "NZDUSD") return 1;
-         if(sym2 == "USDCHF") return -2;
-         if(sym2 == "USDCAD") return -1;
-         if(sym2 == "EURJPY") return 0;
-         if(sym2 == "GBPJPY") return 1;
-         if(sym2 == "EURCHF") return 1;
-         if(sym2 == "AUDJPY") return 0;
-         return 0;
+         // Commodity Bloc: AUD, NZD, CAD
+         bool isComm1 = (base1=="AUD" || base1=="NZD" || base1=="CAD" || quote1=="AUD" || quote1=="NZD" || quote1=="CAD");
+         bool isComm2 = (base2=="AUD" || base2=="NZD" || base2=="CAD" || quote2=="AUD" || quote2=="NZD" || quote2=="CAD");
+         if(isComm1 && isComm2) score += 1;
+
+         // European Bloc: EUR, GBP, CHF
+         bool isEuro1 = (base1=="EUR" || base1=="GBP" || base1=="CHF" || quote1=="EUR" || quote1=="GBP" || quote1=="CHF");
+         bool isEuro2 = (base2=="EUR" || base2=="GBP" || base2=="CHF" || quote2=="EUR" || quote2=="GBP" || quote2=="CHF");
+         if(isEuro1 && isEuro2) score += 1;
         }
 
-      // --- AUDUSD ---
-      if(sym1 == "AUDUSD")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return 2;
-         if(sym2 == "EURUSD") return 2;
-         if(sym2 == "GBPUSD") return 1;
-         if(sym2 == "USDJPY") return 1;
-         if(sym2 == "NZDUSD") return 3;
-         if(sym2 == "USDCHF") return -1;
-         if(sym2 == "USDCAD") return -1;
-         if(sym2 == "EURJPY") return 1;
-         if(sym2 == "GBPJPY") return 1;
-         if(sym2 == "EURCHF") return 0;
-         if(sym2 == "AUDJPY") return 2;
-         return 0;
-        }
-
-      // --- NZDUSD ---
-      if(sym1 == "NZDUSD")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return 1;
-         if(sym2 == "EURUSD") return 2;
-         if(sym2 == "GBPUSD") return 1;
-         if(sym2 == "USDJPY") return 1;
-         if(sym2 == "AUDUSD") return 3;
-         if(sym2 == "USDCHF") return -1;
-         if(sym2 == "USDCAD") return -1;
-         if(sym2 == "EURJPY") return 1;
-         if(sym2 == "GBPJPY") return 1;
-         if(sym2 == "EURCHF") return 0;
-         if(sym2 == "AUDJPY") return 2;
-         return 0;
-        }
-
-      // --- USDJPY ---
-      if(sym1 == "USDJPY")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return -1;
-         if(sym2 == "EURUSD") return -1;
-         if(sym2 == "GBPUSD") return -1;
-         if(sym2 == "AUDUSD") return 1;
-         if(sym2 == "NZDUSD") return 1;
-         if(sym2 == "USDCHF") return 1;
-         if(sym2 == "USDCAD") return 1;
-         if(sym2 == "EURJPY") return 2;
-         if(sym2 == "GBPJPY") return 2;
-         if(sym2 == "EURCHF") return 0;
-         if(sym2 == "AUDJPY") return 2;
-         return 0;
-        }
-
-
-      // --- USDCHF ---
-      if(sym1 == "USDCHF")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return -2;
-         if(sym2 == "EURUSD") return -3;
-         if(sym2 == "GBPUSD") return -2;
-         if(sym2 == "USDJPY") return 1;
-         if(sym2 == "AUDUSD") return -1;
-         if(sym2 == "NZDUSD") return -1;
-         if(sym2 == "USDCAD") return 1;
-         if(sym2 == "EURJPY") return -1;
-         if(sym2 == "GBPJPY") return -1;
-         if(sym2 == "EURCHF") return -1;
-         if(sym2 == "AUDJPY") return -1;
-         return 0;
-        }
-
-      // --- USDCAD ---
-      if(sym1 == "USDCAD")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return -1;
-         if(sym2 == "EURUSD") return -1;
-         if(sym2 == "GBPUSD") return -1;
-         if(sym2 == "USDJPY") return 1;
-         if(sym2 == "AUDUSD") return -1;
-         if(sym2 == "NZDUSD") return -1;
-         if(sym2 == "USDCHF") return 1;
-         if(sym2 == "EURJPY") return 0;
-         if(sym2 == "GBPJPY") return 0;
-         if(sym2 == "EURCHF") return 0;
-         if(sym2 == "AUDJPY") return -1;
-         return 0;
-        }
-
-      // --- EURJPY ---
-      if(sym1 == "EURJPY")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return 0;
-         if(sym2 == "EURUSD") return 1;
-         if(sym2 == "GBPUSD") return 0;
-         if(sym2 == "USDJPY") return 2;
-         if(sym2 == "AUDUSD") return 1;
-         if(sym2 == "NZDUSD") return 1;
-         if(sym2 == "USDCHF") return -1;
-         if(sym2 == "USDCAD") return 0;
-         if(sym2 == "GBPJPY") return 2;
-         if(sym2 == "EURCHF") return 1;
-         if(sym2 == "AUDJPY") return 2;
-         return 0;
-        }
-
-      // --- GBPJPY ---
-      if(sym1 == "GBPJPY")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return 0;
-         if(sym2 == "EURUSD") return 0;
-         if(sym2 == "GBPUSD") return 1;
-         if(sym2 == "USDJPY") return 2;
-         if(sym2 == "AUDUSD") return 1;
-         if(sym2 == "NZDUSD") return 1;
-         if(sym2 == "USDCHF") return -1;
-         if(sym2 == "USDCAD") return 0;
-         if(sym2 == "EURJPY") return 2;
-         if(sym2 == "EURCHF") return 0;
-         if(sym2 == "AUDJPY") return 2;
-         return 0;
-        }
-
-      // --- EURCHF ---
-      if(sym1 == "EURCHF")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return -1;
-         if(sym2 == "EURUSD") return 2;
-         if(sym2 == "GBPUSD") return 1;
-         if(sym2 == "USDJPY") return 0;
-         if(sym2 == "AUDUSD") return 0;
-         if(sym2 == "NZDUSD") return 0;
-         if(sym2 == "USDCHF") return -1;
-         if(sym2 == "USDCAD") return 0;
-         if(sym2 == "EURJPY") return 1;
-         if(sym2 == "GBPJPY") return 0;
-         if(sym2 == "AUDJPY") return 0;
-         return 0;
-        }
-
-      // --- AUDJPY ---
-      if(sym1 == "AUDJPY")
-        {
-         if(sym2 == "GOLD" || sym2 == "XAUUSD") return 0;
-         if(sym2 == "EURUSD") return 1;
-         if(sym2 == "GBPUSD") return 0;
-         if(sym2 == "USDJPY") return 2;
-         if(sym2 == "AUDUSD") return 2;
-         if(sym2 == "NZDUSD") return 2;
-         if(sym2 == "USDCHF") return -1;
-         if(sym2 == "USDCAD") return -1;
-         if(sym2 == "EURJPY") return 2;
-         if(sym2 == "GBPJPY") return 2;
-         if(sym2 == "EURCHF") return 0;
-         return 0;
-        }
-
-      // --- XAUUSD (GOLD) ---
-      if(sym1 == "XAUUSD" || sym1 == "GOLD")
-        {
-         if(sym2 == "EURUSD") return 2;
-         if(sym2 == "GBPUSD") return 1;
-         if(sym2 == "USDJPY") return -1;
-         if(sym2 == "AUDUSD") return 2;
-         if(sym2 == "NZDUSD") return 1;
-         if(sym2 == "USDCHF") return -2;
-         if(sym2 == "USDCAD") return -1;
-         if(sym2 == "EURJPY") return 0;
-         if(sym2 == "GBPJPY") return 0;
-         if(sym2 == "EURCHF") return 1;
-         if(sym2 == "AUDJPY") return 0;
-         return 0;
-        }
-
-      return 0;
+      return score;
      }
 
    //+------------------------------------------------------------------+
@@ -273,24 +134,41 @@ private:
 
 public:
    //+------------------------------------------------------------------+
-   //| Constructor — populate the symbol universe                       |
+   //| Constructor — populate the 28-pair + gold symbol universe        |
    //+------------------------------------------------------------------+
                      COttoCorrelationFilter(void)
      {
       m_symbol = "";
-      ArrayResize(m_allSymbols, 12);
+      ArrayResize(m_allSymbols, 29);
       m_allSymbols[0]  = "EURUSD";
       m_allSymbols[1]  = "GBPUSD";
       m_allSymbols[2]  = "AUDUSD";
       m_allSymbols[3]  = "NZDUSD";
-      m_allSymbols[4]  = "USDJPY";
+      m_allSymbols[4]  = "USDCAD";
       m_allSymbols[5]  = "USDCHF";
-      m_allSymbols[6]  = "USDCAD";
-      m_allSymbols[7]  = "EURJPY";
-      m_allSymbols[8]  = "GBPJPY";
-      m_allSymbols[9]  = "EURCHF";
-      m_allSymbols[10] = "AUDJPY";
-      m_allSymbols[11] = "XAUUSD";
+      m_allSymbols[6]  = "USDJPY";
+      m_allSymbols[7]  = "EURGBP";
+      m_allSymbols[8]  = "EURAUD";
+      m_allSymbols[9]  = "EURNZD";
+      m_allSymbols[10] = "EURCAD";
+      m_allSymbols[11] = "EURCHF";
+      m_allSymbols[12] = "EURJPY";
+      m_allSymbols[13] = "GBPAUD";
+      m_allSymbols[14] = "GBPNZD";
+      m_allSymbols[15] = "GBPCAD";
+      m_allSymbols[16] = "GBPCHF";
+      m_allSymbols[17] = "GBPJPY";
+      m_allSymbols[18] = "AUDNZD";
+      m_allSymbols[19] = "AUDCAD";
+      m_allSymbols[20] = "AUDCHF";
+      m_allSymbols[21] = "AUDJPY";
+      m_allSymbols[22] = "NZDCAD";
+      m_allSymbols[23] = "NZDCHF";
+      m_allSymbols[24] = "NZDJPY";
+      m_allSymbols[25] = "CADCHF";
+      m_allSymbols[26] = "CADJPY";
+      m_allSymbols[27] = "CHFJPY";
+      m_allSymbols[28] = "XAUUSD";
      }
 
                     ~COttoCorrelationFilter(void) { ArrayFree(m_allSymbols); }
@@ -303,7 +181,7 @@ public:
       m_symbol = symbol;
       if(EnableLogging)
          Print("[Correlation] Initialized for ", m_symbol,
-               " | Matrix: 12-pair weighted -3 to +3");
+               " | Matrix: 28-pair + gold decomposition engine");
       return true;
      }
 
@@ -323,7 +201,7 @@ public:
    //+------------------------------------------------------------------+
    void              BroadcastBias(int bias)
      {
-      string varName = "TS_Bias_" + m_symbol;   // Key shared across EA instances
+      string varName = "TS_Bias_" + CleanSymbol(m_symbol);   // Key shared across EA instances
       if(bias == 0)
          GlobalVariableDel(varName);
       else
@@ -338,7 +216,7 @@ public:
       int totalBias = 0;
       for(int i = 0; i < ArraySize(m_allSymbols); i++)
         {
-         if(m_allSymbols[i] == m_symbol) continue;
+         if(CleanSymbol(m_allSymbols[i]) == CleanSymbol(m_symbol)) continue;
          string varName = "TS_Bias_" + m_allSymbols[i];
          if(GlobalVariableCheck(varName))
            {

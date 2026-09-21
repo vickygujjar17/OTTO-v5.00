@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.21)            |
+//|                    Pine Script Master Build Port (v5.22)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.21"
+#property version   "5.22"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -66,7 +66,9 @@ datetime g_lastBarTime      = 0;
 
 // --- Prop Firm Safety State ---
 double   g_initialBalance      = 0;
-double   g_midnightBalance     = 0;
+double   g_dailyResetBalance   = 0;  // Resets at 00:00 Server Time (5:00 PM EST)
+double   g_highWaterMarkBalance= 0;  // Tracks highest CLOSED balance for Trailing Drawdown
+double   g_equityHighWaterMark = 0;  // Tracks highest EQUITY for the trailing floating-loss rule
 datetime g_lastMidnightCheck   = 0;
 bool     g_dailyDD_Paused      = false;
 bool     g_totalDD_Halted      = false;
@@ -80,7 +82,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.21 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.22 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -188,15 +190,18 @@ int OnInit(void)
    Print("[INIT] Trade Manager OK");
 
    // --- Prop firm safety state ---
-   g_initialBalance   = AccountInfoDouble(ACCOUNT_BALANCE);
-   g_midnightBalance  = g_initialBalance;
-   g_dailyDD_Paused   = false;
-   g_totalDD_Halted   = false;
+   g_initialBalance       = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_dailyResetBalance    = g_initialBalance;
+   g_highWaterMarkBalance = g_initialBalance;
+   g_equityHighWaterMark  = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_dailyDD_Paused       = false;
+   g_totalDD_Halted       = false;
    MqlDateTime dt;
    TimeCurrent(dt);
    g_lastMidnightCheck = StructToTime(dt);
    Print("[Safety] Init Balance: ", DoubleToString(g_initialBalance, 2),
-         " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD: ", SafetyTotalDDLimit, "%");
+         " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD: ", SafetyTotalDDLimit,
+         "% | Floating: ", SafetyMaxFloatingLoss, "%");
 
    // --- Market-day counter init (mirrors ta.change(time("D"))) ---
    g_lastDailyBarTime = iTime(_Symbol, PERIOD_D1, 0);
@@ -300,23 +305,26 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
-//| Checks daily balance reset at midnight server time               |
+//| Checks daily balance reset at midnight server time (5PM EST close) |
 //+------------------------------------------------------------------+
 void CheckDailyReset(void)
   {
    MqlDateTime dt;
    TimeCurrent(dt);
-   datetime todayMidnight = StructToTime(dt);
+   // 00:00 Server Time aligns with 5:00 PM EST (New York close) on the
+   // standard prop-firm broker timezone (UTC+2/+3), so the daily candle
+   // rollover IS the GFT daily reset boundary.
+   datetime serverMidnight_5pmEST = StructToTime(dt);
 
-   if(todayMidnight != g_lastMidnightCheck)
+   if(serverMidnight_5pmEST != g_lastMidnightCheck)
      {
-      g_midnightBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-      g_lastMidnightCheck = todayMidnight;
+      g_dailyResetBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+      g_lastMidnightCheck = serverMidnight_5pmEST;
       if(g_dailyDD_Paused)
         {
          g_dailyDD_Paused = false;
          if(EnableLogging)
-            Print("[Safety] New day â€” daily DD pause LIFTED");
+            Print("[Safety] New day (5:00 PM EST) — daily DD pause LIFTED");
         }
      }
   }
@@ -411,12 +419,52 @@ void OnTick(void)
    // ================================================================
    // STEP 0: PROP FIRM SAFETY CHECKS (highest priority)
    // ================================================================
-   if(!g_dailyDD_Paused)
+   if(!g_dailyDD_Paused && !g_totalDD_Halted)
      {
-      double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-      double dailyDD = (g_midnightBalance > 0) ? 100.0 * (g_midnightBalance - equity) / g_midnightBalance : 0;
-      double totalDD = (g_initialBalance  > 0) ? 100.0 * (g_initialBalance  - equity) / g_initialBalance  : 0;
+      double equity         = AccountInfoDouble(ACCOUNT_EQUITY);
+      double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
+      // Trailing high-water marks. The total-DD limit trails the highest
+      // CLOSED balance (GFT measures total DD against peak account value);
+      // the floating rule trails the highest EQUITY so it reacts to open
+      // P&L. Both only ever ratchet UP, never down.
+      if(currentBalance > g_highWaterMarkBalance)
+         g_highWaterMarkBalance = currentBalance;
+      if(equity > g_equityHighWaterMark)
+         g_equityHighWaterMark = equity;
+
+      double dailyDD = (g_dailyResetBalance > 0) ? 100.0 * (g_dailyResetBalance - equity) / g_dailyResetBalance : 0;
+      double totalDD = (g_highWaterMarkBalance > 0) ? 100.0 * (g_highWaterMarkBalance - equity) / g_highWaterMarkBalance : 0;
+      // FIX (v5.22): trailing floating-loss measure. A plain balance-vs-equity
+      // ratio fires on any routine dip while equity sits below its own peak,
+      // permanently halting the EA on a normal tick. Measuring the retracement
+      // from PEAK EQUITY instead means the rule only trips on a genuine 1%
+      // give-back from the equity high-water mark.
+      double floatingLoss = (g_equityHighWaterMark > 0)
+                            ? 100.0 * (g_equityHighWaterMark - equity) / g_equityHighWaterMark
+                            : 0;
+
+      // 1% Max Floating Loss Rule (highest priority: protects open risk)
+      if(floatingLoss >= SafetyMaxFloatingLoss)
+        {
+         g_totalDD_Halted = true;
+         g_orderManager.CancelAllPendingOrders();
+         // Close the WHOLE basket: hedging-mode pyramid tranches are separate
+         // positions and must not survive the halt.
+         if(g_orderManager.HasActiveTrade() || g_orderManager.CountOpenPositions() > 0)
+            g_orderManager.CloseEntireBasket("1% Max Floating Loss Breach");
+
+         Print("==============================================================");
+         Print("  FATAL: 1% MAX FLOATING LOSS LIMIT REACHED — EA HALTED");
+         Print("  Peak Equity: ", DoubleToString(g_equityHighWaterMark, 2),
+               " | Equity: ", DoubleToString(equity, 2));
+         Print("  Floating Loss: ", DoubleToString(floatingLoss, 2), "% >= ",
+               DoubleToString(SafetyMaxFloatingLoss, 2), "%");
+         Print("==============================================================");
+         return;
+        }
+
+      // 3% Max Daily Drawdown (soft breach: pause new orders only)
       if(dailyDD >= SafetyDailyDDLimit)
         {
          g_dailyDD_Paused = true;
@@ -424,9 +472,10 @@ void OnTick(void)
          g_orderManager.CancelAllPendingOrders();
          if(EnableLogging)
             Print("[Safety] DAILY DRAWDOWN: ", DoubleToString(dailyDD, 2),
-                  "% â‰¥ ", SafetyDailyDDLimit, "% â€” paused new orders");
+                  "% >= ", SafetyDailyDDLimit, "% — paused new orders");
         }
 
+      // 5% Trailing Total Drawdown (hard breach: close all + halt)
       if(totalDD >= SafetyTotalDDLimit)
         {
          g_totalDD_Halted = true;
@@ -434,10 +483,12 @@ void OnTick(void)
          // Close the WHOLE basket, not just the primary ticket: hedging-mode
          // pyramid tranches are separate positions and must not survive the halt.
          if(g_orderManager.HasActiveTrade() || g_orderManager.CountOpenPositions() > 0)
-            g_orderManager.CloseEntireBasket("Total DD Halt");
+            g_orderManager.CloseEntireBasket("Total Trailing DD Halt");
          Print("==============================================================");
-         Print("  FATAL: TOTAL DRAWDOWN LIMIT REACHED â€” EA PERMANENTLY HALTED");
-         Print("  DD: ", DoubleToString(totalDD, 2), "% â‰¥ ", SafetyTotalDDLimit, "%");
+         Print("  FATAL: TOTAL TRAILING DRAWDOWN LIMIT REACHED — EA PERMANENTLY HALTED");
+         Print("  HWM: ", DoubleToString(g_highWaterMarkBalance, 2),
+               " | Equity: ", DoubleToString(equity, 2));
+         Print("  DD: ", DoubleToString(totalDD, 2), "% >= ", SafetyTotalDDLimit, "%");
          Print("==============================================================");
          return;
         }

@@ -4,7 +4,7 @@
 //|              OTTO EA — Institutional portfolio filter            |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.00"
+#property version   "5.01"
 
 #ifndef __OTTO_CORRELATION_FILTER__
 #define __OTTO_CORRELATION_FILTER__

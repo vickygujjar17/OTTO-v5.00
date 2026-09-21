@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.24)            |
+//|                    Pine Script Master Build Port (v5.25)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.24"
+#property version   "5.25"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -80,14 +80,97 @@ bool     g_totalDD_Halted      = false;
 datetime g_dailyDD_ResumeTime  = 0;
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                     |
+//| Prop-firm persistent state key helpers (v5.25)                    |
+//|                                                                   |
+//| The EA is deployed on a VPS and WILL be restarted mid-session.     |
+//| Re-seeding the drawdown baselines from live account values on every |
+//| init silently resets the daily 3% budget and re-bases the trailing |
+//| limits downward, so the baselines are persisted in MT5 Global      |
+//| Variables instead.                                                 |
+//|                                                                   |
+//| Keys are namespaced OTTO_* and suffixed with the account login, so  |
+//| the ~28 EA instances and any other account on the same terminal    |
+//| cannot collide. COttoCorrelationFilter owns the TS_Bias_* namespace |
+//| and is deliberately not touched.                                   |
+//|                                                                   |
+//| NOTE: Globals live in the TERMINAL's shared namespace, not per     |
+//| chart. Two terminals on one machine have separate stores; two charts|
+//| of the same account in ONE terminal intentionally share these keys. |
+//+------------------------------------------------------------------+
+string OttoGvName(const string key)
+  {
+   return "OTTO_" + key + "_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+  }
+
+//| Read a persisted double, falling back when the key is absent.     |
+double OttoGvLoadDouble(const string key, const double fallback)
+  {
+   string name = OttoGvName(key);
+   if(!GlobalVariableCheck(name))
+      return fallback;
+   double v = GlobalVariableGet(name);
+   // A GV deleted by the terminal or never set reads back as 0.0; treat
+   // that as absent rather than as a legitimate baseline.
+   if(v == 0.0)
+      return fallback;
+   return v;
+  }
+
+//| Read a persisted boolean flag (stored as 0.0 / 1.0).              |
+bool OttoGvLoadFlag(const string key, const bool fallback)
+  {
+   string name = OttoGvName(key);
+   if(!GlobalVariableCheck(name))
+      return fallback;
+   return (GlobalVariableGet(name) >= 0.5);
+  }
+
+//| Write/persist a double. Returns false if the terminal refused it. |
+//| NOTE: GlobalVariableSet returns datetime (last-access time), not bool. |
+bool OttoGvStore(const string key, const double value)
+  {
+   if(!GlobalVariableSet(OttoGvName(key), value))
+     {
+      Print("[Safety] WARNING: GlobalVariableSet failed for ", OttoGvName(key));
+      return false;
+     }
+   return true;
+  }
+
+//| Persist one boolean flag as 0.0 / 1.0.                            |
+bool OttoGvStoreFlag(const string key, const bool value)
+  {
+   if(!GlobalVariableSet(OttoGvName(key), value ? 1.0 : 0.0))
+     {
+      Print("[Safety] WARNING: GlobalVariableSet failed for ", OttoGvName(key));
+      return false;
+     }
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| Persist every prop-firm safety baseline (v5.25).                   |
+//| Called whenever a baseline moves, so a restart always resumes from |
+//| the true rather than the current account state.                    |
+//+------------------------------------------------------------------+
+void PersistSafetyState(void)
+  {
+   OttoGvStore("DailyReset", g_dailyResetBalance);
+   OttoGvStore("HighWater",  g_equityHighWaterMark);
+   OttoGvStore("LastMid",    (double)g_lastMidnightCheck);
+   OttoGvStoreFlag("Paused", g_dailyDD_Paused);
+   OttoGvStoreFlag("Halted", g_totalDD_Halted);
+  }
+
+//+------------------------------------------------------------------+
+//| int OnInit(void)
 //+------------------------------------------------------------------+
 int OnInit(void)
   {
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.24 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.25 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -194,21 +277,68 @@ int OnInit(void)
      }
    Print("[INIT] Trade Manager OK");
 
-   // --- Prop firm safety state ---
-   g_initialBalance       = AccountInfoDouble(ACCOUNT_BALANCE);
-   g_dailyResetBalance    = g_initialBalance;
-   // FIX (v5.23): trailing rule basis. Must be seeded here or the peak-equity
-   // comparison has no baseline on the first tick. FIX (v5.24): this single
-   // HWM now backs BOTH the 5% trailing DD and the 1% floating rule.
-   g_equityHighWaterMark  = AccountInfoDouble(ACCOUNT_EQUITY);
-   g_dailyDD_Paused       = false;
-   g_totalDD_Halted       = false;
-   // iTime with PERIOD_D1 natively returns the 00:00 server timestamp (5:00 PM
-   // EST) for the current day. The previous MqlDateTime/TimeCurrent/StructToTime
-   // form carried the live HH:MM:SS, so the != guard below fired on every tick.
-   g_lastMidnightCheck    = iTime(_Symbol, PERIOD_D1, 0);
-   Print("[Safety] Init Balance: ", DoubleToString(g_initialBalance, 2),
+   // --- Prop firm safety state: PERSISTENT MEMORY (v5.25) ---
+   // FIX (v5.25): these baselines are loaded from MT5 GlobalVariables and only
+   // seeded when absent. Previously every init re-seeded them from the LIVE
+   // account, so a VPS restart mid-session reset the 3% daily budget and
+   // re-based the trailing limits downward -- "drawdown amnesia".
+   //
+   // The live trailing basis is g_equityHighWaterMark (single equity HWM, v5.24,
+   // shared by the 5% trailing DD and the 1% floating rule). The directive that
+   // requested this patch referred to a global named `g_highWaterMark`, which
+   // does not exist in this build; persisting a separate new global under that
+   // name would compile while leaving the REAL basis unpersisted, so the correct
+   // target is used deliberately here.
+   g_initialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   double liveEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   datetime todayBar = iTime(_Symbol, PERIOD_D1, 0);
+
+   // --- Daily reset anchor (3% daily DD basis) ---
+   // Re-seeded when absent OR when the stored midnight stamp is older than the
+   // currently-loaded D1 bar: a prop firm can RESET a challenge account on the
+   // same login, and carrying the old anchor across that reset would apply a
+   // stale (possibly already-breached) budget to a freshly-funded account.
+   g_lastMidnightCheck = (datetime)OttoGvLoadDouble("LastMid", (double)todayBar);
+   bool staleAnchor    = (todayBar != 0 && g_lastMidnightCheck < todayBar);
+   double storedDaily  = OttoGvLoadDouble("DailyReset", liveEquity);
+   if(staleAnchor)
+      g_dailyResetBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   else
+      g_dailyResetBalance = storedDaily;
+   if(g_dailyResetBalance <= 0)
+      g_dailyResetBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   // --- Trailing high-water mark (5% trailing DD + 1% floating basis) ---
+   // A stored HWM BELOW current equity is simply stale history (the account has
+   // since made new highs) and is superseded by live equity. A stored HWM far
+   // ABOVE current equity is honoured as a genuine prior peak, because that is
+   // precisely the state this fix exists to remember -- a restart while down.
+   double storedHwm = OttoGvLoadDouble("HighWater", liveEquity);
+   g_equityHighWaterMark = (storedHwm > liveEquity) ? storedHwm : liveEquity;
+
+   // --- Halt / pause latches ---
+   // g_totalDD_Halted is PERMANENT: a breached account must stay halted across a
+   // restart, otherwise a VPS bounce would silently resume trading past a
+   // hard limit. g_dailyDD_Paused clears at the session rollover (see
+   // CheckDailyReset) and is recomputed here from the persisted anchor.
+   g_totalDD_Halted = OttoGvLoadFlag("Halted", false);
+   g_dailyDD_Paused = OttoGvLoadFlag("Paused", false) && !staleAnchor;
+   g_dailyDD_ResumeTime = (g_dailyDD_Paused && g_lastMidnightCheck > 0)
+                          ? g_lastMidnightCheck + 86400 : 0;
+
+   // Persist the reconciled baselines so the store matches in-memory truth.
+   PersistSafetyState();
+
+   Print("[Safety] Persistence: ", staleAnchor ? "STALE ANCHOR RE-SEEDED" : "restored",
+         " | DailyReset: ", DoubleToString(g_dailyResetBalance, 2),
+         " (stored ", DoubleToString(storedDaily, 2), ")",
          " | Equity HWM: ", DoubleToString(g_equityHighWaterMark, 2),
+         " (stored ", DoubleToString(storedHwm, 2), ")");
+   Print("[Safety] Restored latches: Paused=", g_dailyDD_Paused ? "true" : "false",
+         " Halted=", g_totalDD_Halted ? "true" : "false",
+         " | LastMidnight: ", TimeToString(g_lastMidnightCheck, TIME_DATE|TIME_MINUTES));
+   Print("[Safety] Init Balance: ", DoubleToString(g_initialBalance, 2),
          " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD(trailing): ", SafetyTotalDDLimit,
          "% | Floating: ", SafetyMaxFloatingLoss, "%");
    Print("[Safety] Daily reset anchor: ", TimeToString(g_lastMidnightCheck, TIME_DATE|TIME_MINUTES));
@@ -333,6 +463,7 @@ void CheckDailyReset(void)
      {
       g_dailyResetBalance = AccountInfoDouble(ACCOUNT_BALANCE);
       g_lastMidnightCheck = serverMidnight_5pmEST;
+      g_dailyDD_ResumeTime = 0;   // pause window ended with the session
 
       if(g_dailyDD_Paused)
         {
@@ -340,6 +471,15 @@ void CheckDailyReset(void)
          if(EnableLogging)
             Print("[Safety] New day (5:00 PM EST) — daily DD pause LIFTED");
         }
+
+      // FIX (v5.25): persist the new session baselines. Without this the
+      // GlobalVariables would still hold yesterday's anchor, and a restart
+      // after the rollover would restore a stale daily basis.
+      // NOTE: g_totalDD_Halted is deliberately NOT cleared here. The 5% trailing
+      // breach is permanent for the life of the account; only the daily pause is
+      // a per-session state. Clearing the halt on rollover would let a breached
+      // account resume trading at the next midnight.
+      PersistSafetyState();
      }
   }
 
@@ -441,8 +581,14 @@ void OnTick(void)
       // previously trailed the peak CLOSED balance; it now trails peak EQUITY,
       // matching GFT's all-time-equity trailing drawdown and sharing one basis
       // with the 1% floating rule. Only ratchets UP, never down.
+      // FIX (v5.25): each new peak is persisted immediately, so a restart while
+      // the account is down from its high resumes from the TRUE peak instead of
+      // re-basing the trailing floor to the depressed live equity.
       if(equity > g_equityHighWaterMark)
+        {
          g_equityHighWaterMark = equity;
+         OttoGvStore("HighWater", g_equityHighWaterMark);
+        }
 
       double dailyDD = (g_dailyResetBalance > 0) ? 100.0 * (g_dailyResetBalance - equity) / g_dailyResetBalance : 0;
       double totalDD = (g_equityHighWaterMark > 0) ? 100.0 * (g_equityHighWaterMark - equity) / g_equityHighWaterMark : 0;
@@ -462,6 +608,7 @@ void OnTick(void)
       if(floatingLoss >= SafetyMaxFloatingLoss)
         {
          g_totalDD_Halted = true;
+         OttoGvStoreFlag("Halted", true);   // FIX (v5.25): survives a restart
          g_orderManager.CancelAllPendingOrders();
          // Close the WHOLE basket: hedging-mode pyramid tranches are separate
          // positions and must not survive the halt.
@@ -483,6 +630,7 @@ void OnTick(void)
         {
          g_dailyDD_Paused = true;
          g_dailyDD_ResumeTime = g_lastMidnightCheck + 86400;
+         OttoGvStoreFlag("Paused", true);   // FIX (v5.25): survives a restart
          g_orderManager.CancelAllPendingOrders();
          if(EnableLogging)
             Print("[Safety] DAILY DRAWDOWN: ", DoubleToString(dailyDD, 2),
@@ -493,6 +641,7 @@ void OnTick(void)
       if(totalDD >= SafetyTotalDDLimit)
         {
          g_totalDD_Halted = true;
+         OttoGvStoreFlag("Halted", true);   // FIX (v5.25): survives a restart
          g_orderManager.CancelAllPendingOrders();
          // Close the WHOLE basket, not just the primary ticket: hedging-mode
          // pyramid tranches are separate positions and must not survive the halt.

@@ -5,7 +5,7 @@
 //|              Suffix-safe (handles broker suffixes like .x)        |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.14"
+#property version   "5.15"
 
 #ifndef __OTTO_CORRELATION_FILTER__
 #define __OTTO_CORRELATION_FILTER__
@@ -109,10 +109,18 @@ private:
          ulong ticket = PositionGetTicket(i);
          if(ticket <= 0) continue;
          if(!PositionSelectByTicket(ticket)) continue;
-         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-
          string posSymbol = PositionGetString(POSITION_SYMBOL);
          long   posType   = PositionGetInteger(POSITION_TYPE);
+
+         // FIX (v5.15): manual GOLD positions are factored into portfolio
+         // correlation. Scoped narrowly: (1) only gold, and (2) only TRULY
+         // manual tickets (magic == 0) - other EAs positions are left alone.
+         // Note gold scores +/-2 against every USD pair, i.e. exactly the
+         // veto threshold, so this deliberately widens the veto surface to
+         // external gold. It is NOT applied to FX pairs.
+         bool isExternalGold = (CleanSymbol(posSymbol) == "XAUUSD" &&
+                                PositionGetInteger(POSITION_MAGIC) == 0);
+         if(!isExternalGold && PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
          int    posDir    = (posType == POSITION_TYPE_BUY) ? 1 : -1;
          int    score     = GetCorrelationScore(m_symbol, posSymbol);
 

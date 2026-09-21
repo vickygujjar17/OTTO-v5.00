@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.14"
+#property version   "5.15"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -113,6 +113,12 @@ public:
       double liveAsk = SymbolInfoDouble(m_symbol, SYMBOL_ASK);
       double currentRR = 0.0;
       double desiredSL = trade.currentTrailSL;
+      // FIX (v5.15): after a T2/T3 ApplyUnifiedSL moved the BASKET stop, the
+      // primary struct field (trade.currentTrailSL) lags behind the real
+      // ratcheted value. Re-seed from the authoritative session SL so the
+      // guards below and the T3 trail block work off the true basket stop.
+      if(m_orderManager.GetBasketCount() > 0 && m_orderManager.GetSessionSL() > 0)
+         desiredSL = m_orderManager.GetSessionSL();
 
       if(dir == DIR_LONG)
         {
@@ -186,7 +192,15 @@ public:
         }
       // Dynamic ATR Trail at +3.0R: apply SAME trailing SL to every ticket
       if(currentRR >= InpLock3RRR)
+        {
          m_orderManager.ApplyUnifiedSL(desiredSL);
+         // FIX (v5.15): mirror the AUTHORITATIVE ratcheted value back into the
+         // active-trade struct. Read back from GetSessionSL() rather than
+         // writing desiredSL: the ratchet may have rejected desiredSL and
+         // retained a tighter stop, and writing desiredSL here would
+         // re-introduce the very desync this fix removes.
+         m_orderManager.SetActiveTradeSL(m_orderManager.GetSessionSL());
+        }
 
       // --- Push the primary stop to the broker ---
       // When a multi-tranche basket is active, ApplyUnifiedSL() above already

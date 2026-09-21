@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.22)            |
+//|                    Pine Script Master Build Port (v5.23)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.22"
+#property version   "5.23"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -82,7 +82,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.22 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.23 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -193,15 +193,19 @@ int OnInit(void)
    g_initialBalance       = AccountInfoDouble(ACCOUNT_BALANCE);
    g_dailyResetBalance    = g_initialBalance;
    g_highWaterMarkBalance = g_initialBalance;
+   // FIX (v5.23): trailing 1% floating-rule basis. Must be seeded here or the
+   // rule's peak-equity comparison has no baseline on the first tick.
    g_equityHighWaterMark  = AccountInfoDouble(ACCOUNT_EQUITY);
    g_dailyDD_Paused       = false;
    g_totalDD_Halted       = false;
-   MqlDateTime dt;
-   TimeCurrent(dt);
-   g_lastMidnightCheck = StructToTime(dt);
+   // iTime with PERIOD_D1 natively returns the 00:00 server timestamp (5:00 PM
+   // EST) for the current day. The previous MqlDateTime/TimeCurrent/StructToTime
+   // form carried the live HH:MM:SS, so the != guard below fired on every tick.
+   g_lastMidnightCheck    = iTime(_Symbol, PERIOD_D1, 0);
    Print("[Safety] Init Balance: ", DoubleToString(g_initialBalance, 2),
          " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD: ", SafetyTotalDDLimit,
          "% | Floating: ", SafetyMaxFloatingLoss, "%");
+   Print("[Safety] Daily reset anchor: ", TimeToString(g_lastMidnightCheck, TIME_DATE|TIME_MINUTES));
 
    // --- Market-day counter init (mirrors ta.change(time("D"))) ---
    g_lastDailyBarTime = iTime(_Symbol, PERIOD_D1, 0);
@@ -309,17 +313,21 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void CheckDailyReset(void)
   {
-   MqlDateTime dt;
-   TimeCurrent(dt);
-   // 00:00 Server Time aligns with 5:00 PM EST (New York close) on the
-   // standard prop-firm broker timezone (UTC+2/+3), so the daily candle
-   // rollover IS the GFT daily reset boundary.
-   datetime serverMidnight_5pmEST = StructToTime(dt);
+   // iTime with PERIOD_D1 natively returns the 00:00 server timestamp (5:00 PM EST)
+   // FIX (v5.23): the previous MqlDateTime/TimeCurrent/StructToTime form kept the
+   // live HH:MM:SS, so this timestamp changed every tick and the reset below
+   // re-baselined g_dailyResetBalance continuously -- silently disabling the 3%
+   // daily drawdown limit. iTime truncates to the 00:00 daily candle open.
+   datetime serverMidnight_5pmEST = iTime(_Symbol, PERIOD_D1, 0);
 
-   if(serverMidnight_5pmEST != g_lastMidnightCheck)
+   // Ensure the timestamp is valid before processing: iTime returns 0 when the
+   // D1 series is not yet available (fresh chart / history still downloading),
+   // and a 0 would otherwise trip a spurious reset on the first tick.
+   if(serverMidnight_5pmEST != 0 && serverMidnight_5pmEST != g_lastMidnightCheck)
      {
       g_dailyResetBalance = AccountInfoDouble(ACCOUNT_BALANCE);
       g_lastMidnightCheck = serverMidnight_5pmEST;
+
       if(g_dailyDD_Paused)
         {
          g_dailyDD_Paused = false;

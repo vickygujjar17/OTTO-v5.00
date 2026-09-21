@@ -3,7 +3,7 @@
 //|       MODULE 6 - Dynamic Trade Management (exact Pine v4.70) + Pyr |
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
-#property copyright "OTTO EA"
+#property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
 #property version   "5.00"
 
 #ifndef __OTTO_TRADE_MANAGER__

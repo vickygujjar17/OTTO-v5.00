@@ -3,7 +3,7 @@
 //|                 MODULE — Risk Sizing (RiskPercent% or Fixed $)   |
 //|              OTTO EA — Institutional risk manager                |
 //+------------------------------------------------------------------+
-#property copyright "OTTO EA"
+#property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
 #property version   "5.00"
 
 #ifndef __OTTO_RISK_MANAGER__

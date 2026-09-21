@@ -3,7 +3,7 @@
 //|          MODULE — Pivot High/Low Generation (Left=8, Right=3)     |
 //|              OTTO EA — exact ta.pivothigh/pivotlow port           |
 //+------------------------------------------------------------------+
-#property copyright "OTTO EA"
+#property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
 #property version   "5.00"
 
 #ifndef __OTTO_MARKET_STRUCTURE__

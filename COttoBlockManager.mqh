@@ -3,7 +3,7 @@
 //|         MODULE 4 — Wick1+Wick2 Formation & v4.70 Veto Funnel     |
 //|              OTTO EA — exact Pine v4.70 block logic port          |
 //+------------------------------------------------------------------+
-#property copyright "OTTO EA"
+#property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
 #property version   "5.00"
 
 #ifndef __OTTO_BLOCK_MANAGER__

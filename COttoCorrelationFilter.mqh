@@ -3,7 +3,7 @@
 //|              MODULE — Weighted Correlation Matrix (-3 to +3)      |
 //|              OTTO EA — Institutional portfolio filter            |
 //+------------------------------------------------------------------+
-#property copyright "OTTO EA"
+#property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
 #property version   "5.00"
 
 #ifndef __OTTO_CORRELATION_FILTER__

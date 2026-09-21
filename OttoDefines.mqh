@@ -1,11 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|                 OTTO EA v5.00 — Master Build Central Definitions  |
+//|             OTTO EA v5.00 — Goat Funded Trader (GFT) Master Build |
+//|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
-#property copyright "OTTO EA"
+#property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
 #property version   "5.00"
-#property description "OTTO — Pine v4.70 Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes)"
+#property description "OTTO — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -246,8 +247,8 @@ input group "══════════════════════�
 input group "  [8] PROP FIRM SAFETY BUFFERS"
 input group "══════════════════════════════════════════════════"
 input double   SafetyMaxRiskPct    = 1.5;     // Hard abort if risk > this % of account
-input double   SafetyDailyDDLimit  = 2.0;     // Soft breach: pause new orders at this %
-input double   SafetyTotalDDLimit  = 3.5;     // Hard breach: close all + halt at this %
+input double   SafetyDailyDDLimit  = 3.0;     // Soft breach: pause new orders at this %
+input double   SafetyTotalDDLimit  = 6.0;     // Hard breach: close all + halt at this %
 
 //+------------------------------------------------------------------+
 //| Global Constants                                                 |

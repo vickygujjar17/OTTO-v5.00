@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.20"
+#property version   "5.21"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -1053,6 +1053,13 @@ private:
            }
          // No closing deals found yet (history lag) -> fall through to
          // the single-trade path below rather than logging nothing.
+         // FIX (v5.21): the settle delay in CloseEntireBasket() makes this
+         // rare, but if it still happens the fallback below would emit a
+         // record with exitPrice=0 and profit/swap/commission=0, which is
+         // worse than no record: it reads as a genuine flat exit. Abort the
+         // basket log instead. The next sync tick retries the whole
+         // transition, by which point history has settled.
+         return;
         }
 
       // ---- Single-trade logging (no basket attached) ---------------
@@ -1076,6 +1083,18 @@ private:
          swap       = HistoryDealGetDouble(dt, DEAL_SWAP);
          gross      = HistoryDealGetDouble(dt, DEAL_PROFIT);
          break;
+        }
+
+      // FIX (v5.21): no closing deal in history means the exit price and all
+      // money fields below would be zero. Publishing that would fabricate a
+      // flat exit that never happened at a price that does not exist, so
+      // bail out and let the next sync tick retry once history has settled.
+      if(exitPrice <= 0.0)
+        {
+         if(EnableLogging)
+            Print("[OrderManager] LogClosedTrade: no closing deal in history for ticket ",
+                  trade.ticket, " -> exit record deferred, not written");
+         return;
         }
 
       m_journal.LogExit(trade.ticket, trade.direction, trade.entryPrice, exitPrice,
@@ -1257,12 +1276,17 @@ public:
    //+------------------------------------------------------------------+
    //| Re-syncs the active trade from broker positions (init/restart)  |
    //|                                                                  |
-   //| ORDERING CONTRACT (FIX v5.20 — position hijacking):              |
+   //| ORDERING CONTRACT (FIX v5.20 — position hijacking;               |
+   //|                    FIX v5.21 — ghost basket remnants):           |
    //|   1. If a trade is already tracked AND its ticket is still an    |
    //|      open position, DO NOTHING. The incumbent stays primary.     |
-   //|   2. Only when the tracked ticket has genuinely disappeared do   |
-   //|      we evaluate the flat transition and clear state.            |
-   //|   3. FindActivePosition() is therefore reached ONLY on a cold    |
+   //|   2. If the tracked ticket has VANISHED but other tranches are   |
+   //|      still open, the primary was stopped out on a partial        |
+   //|      stop-out and the survivors are ghosts: close the whole      |
+   //|      basket now rather than adopting a remnant.                  |
+   //|   3. Only when NOTHING of this basket is left open do we treat   |
+   //|      it as a genuine flat transition and clear state.            |
+   //|   4. FindActivePosition() is therefore reached ONLY on a cold    |
    //|      start (no tracked trade), where it adopts the OLDEST open   |
    //|      position = Tranche 1.                                       |
    //|                                                                  |
@@ -1291,7 +1315,33 @@ public:
 
       ulong ticket; ENUM_TRADE_DIRECTION dir;
 
-      // ---- 2. Tracked ticket gone -> is the account actually flat? -----
+      // ---- 2. Tracked ticket gone -> are its tranches still alive? -----
+      // FIX (v5.21): ghost basket remnant. A partial stop-out can take out
+      // the primary while scale-ins T2/T3 survive. Those survivors are NOT
+      // a new trade: their entry price, SL and lot belong to a basket that
+      // no longer has a primary. Adopting one here would reset the whole
+      // basket's risk geometry from a scale-in leg (the same hijack class
+      // as v5.20, reached by a different route). Close them instead.
+      //
+      // The discriminator is the count of positions still OPEN on the
+      // broker, NOT the length of m_basket[]. A legitimate flat transition
+      // (primary and a tranche both already closed, m_basket[] still len>1)
+      // must fall through to branch 3 so the exit is logged under its real
+      // reason rather than mislabelled as a remnant cleanup.
+      if(m_hasActiveTrade && CountMyPositions() > 0)
+        {
+         if(EnableLogging)
+            Print("[OrderManager] Primary ticket ", m_activeTrade.ticket,
+                  " is gone but ", CountMyPositions(),
+                  " tranche(s) survive -> closing ghost basket remnants");
+         // logExit=true: journal the cleanup in the CURRENT session while
+         // m_basket[] still holds the tranche tickets needed to aggregate
+         // the per-tranche closing deals. ClearBasket() runs inside.
+         CloseEntireBasket("Orphaned Scale-In Cleanup", true);
+         return;
+        }
+
+      // ---- 3. Nothing of ours open -> genuine flat transition ----------
       if(!FindActivePosition(ticket, dir))
         {
          // No position at all -> active -> flat transition = trade closed.
@@ -1305,7 +1355,11 @@ public:
          return;
         }
 
-      // ---- 3. Cold start / flat adoption -> adopt OLDEST (Tranche 1) ---
+      // ---- 4. Cold start / flat adoption -> adopt OLDEST (Tranche 1) ---
+      // Reached only once the account is confirmed clear of our positions
+      // (branch 2 closed any remnants above), which is exactly the
+      // condition that prevents a surviving scale-in from being re-seeded
+      // as a brand-new primary entry.
       SeedActiveTradeFromPosition(ticket);
      }
 
@@ -1748,13 +1802,32 @@ public:
       if(closed > 0)
          Print("[OrderManager] CloseEntireBasket: closed ", closed, " position(s) | ", reason);
 
-      // ---- 3. One aggregated journal record -------------------------
-      // m_basket[] is still populated here on purpose: LogClosedTrade()
-      // needs the tranche tickets to sum the per-tranche closing deals.
       if(logExit)
-         LogClosedTrade(m_activeTrade, reason);
+        {
+         // ---- 3. History settle delay ---------------------------------
+         // FIX (v5.21): the close requests above have been DISPATCHED but
+         // the terminal/broker has not necessarily written the outbound
+         // DEAL_ENTRY_OUT deals into local history yet. LogClosedTrade()
+         // scans that history immediately, so without this pause it can
+         // find nothing, fall through to the single-trade path, and publish
+         // an exit record with a zero price and zero profit/swap/commission.
+         // A short settle window lets the closing deals land so the scan
+         // captures the true exit price, swap, commission and net profit
+         // for every tranche in the basket.
+         //
+         // NOTE: this runs inside OnTick() (reversal and DD-halt paths), so
+         // the pause blocks the tick handler for its duration. It is applied
+         // ONLY when logExit is requested, which keeps the delay off the
+         // deferred-logging paths that do not need it.
+         Sleep(250);
 
-      // ---- 4. Reset state so the next cycle starts flat --------------
+         // ---- 4. One aggregated journal record ------------------------
+         // m_basket[] is still populated here on purpose: LogClosedTrade()
+         // needs the tranche tickets to sum the per-tranche closing deals.
+         LogClosedTrade(m_activeTrade, reason);
+        }
+
+      // ---- 5. Reset state so the next cycle starts flat --------------
       // m_hasActiveTrade is deliberately left intact when the caller will
       // still need the flat-transition log (reversal path); ClearBasket()
       // is deferred there so the tranche tickets survive for aggregation.

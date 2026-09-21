@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.19"
+#property version   "5.20"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -629,28 +629,46 @@ private:
    //| Scans live positions for our Magic+symbol. excludeTicket lets a  |
    //| caller refuse to re-adopt the position it already tracks, which  |
    //| is what stops a pyramid tranche being mistaken for a new fill.   |
+   //|                                                                  |
+   //| FIX (v5.20): previously this walked the book BACKWARDS and       |
+   //| returned the FIRST match, i.e. the highest index. MT5 appends    |
+   //| new positions at the end of the book, so that returned the       |
+   //| NEWEST position -- the exact opposite of the Tranche 1 adoption  |
+   //| contract. On a cold start mid-basket it would adopt a scale-in   |
+   //| tranche as the primary, re-seeding entry/SL/lot from the wrong   |
+   //| leg (the same hijack class as the SyncActiveTrade bug). Now the  |
+   //| book is scanned forwards and the OLDEST opening position wins,   |
+   //| with POSITION_TIME as the tie-break so the result does not        |
+   //| depend on broker book ordering at all.                            |
    //+------------------------------------------------------------------+
    bool                    FindActivePosition(ulong &outTicket, ENUM_TRADE_DIRECTION &outDir,
                                              ulong excludeTicket = 0)
      {
       outTicket = 0; outDir = DIR_NONE;
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      datetime oldest = 0;
+      for(int i = 0; i < PositionsTotal(); i++)
         {
-         if(PositionSelectByTicket(PositionGetTicket(i)))
+         if(!PositionSelectByTicket(PositionGetTicket(i)))
+            continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber ||
+            PositionGetString(POSITION_SYMBOL) != m_symbol)
+            continue;
+
+         ulong pt = (ulong)PositionGetInteger(POSITION_TICKET);
+         if(pt <= 0) continue;
+         if(excludeTicket > 0 && pt == excludeTicket) continue;
+
+         datetime opened = (datetime)PositionGetInteger(POSITION_TIME);
+         // Strictly-older wins; 0 initialises on the very first candidate.
+         if(outTicket == 0 || opened < oldest)
            {
-            if(PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
-               PositionGetString(POSITION_SYMBOL) == m_symbol)
-              {
-               ulong pt = (ulong)PositionGetInteger(POSITION_TICKET);
-               if(excludeTicket > 0 && pt == excludeTicket) continue;
-               outTicket = pt;
-               long posType = PositionGetInteger(POSITION_TYPE);
-               outDir = (posType == POSITION_TYPE_BUY) ? DIR_LONG : DIR_SHORT;
-               return true;
-              }
+            oldest    = opened;
+            outTicket = pt;
+            outDir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                     ? DIR_LONG : DIR_SHORT;
            }
         }
-      return false;
+      return (outTicket > 0);
      }
 
    int                     CountMyPositions(void)
@@ -809,10 +827,14 @@ private:
       // Close the ENTIRE basket, not just the primary ticket. MT5 hedging
       // mode keeps pyramid tranches as separate positions; closing only
       // the primary would orphan tranches 2/3 with no SL management.
-      // logExit=false: the closing deals need a tick to settle in history,
-      // and SyncActiveTrade() re-logs the aggregate once the basket is flat
-      // (m_reversalInProgress was true when it ran, so it will not double-log).
-      CloseEntireBasket("SAR Reversal", false);
+      // FIX (v5.20): logExit=TRUE so this closure is journaled in the
+      // session that is still current. The legacy deferral (logExit=false,
+      // re-logged later via SyncActiveTrade) is retired because logging
+      // after the fact raced the next session ID and could strand the exit
+      // record in the wrong session file. CloseEntireBasket() aggregates
+      // the tranche tickets before ClearBasket() wipes m_basket[], so the
+      // per-tranche closing deals are still resolvable at this point.
+      CloseEntireBasket("SAR Reversal", true);
       return true;
      }
 
@@ -1091,8 +1113,8 @@ private:
             // MT5 hedging mode ADDS the new position instead of offsetting
             // the old leg, so an opposite-side fill leaves both baskets
             // live. Close the incumbent basket first, then adopt the new
-            // position. m_reversalInProgress suppresses the double-log in
-            // SyncActiveTrade() so the exit is recorded exactly once.
+            // position. The exit is journaled HERE, in the still-current
+            // session, before the incoming fill mints its own session ID.
             if(m_hasActiveTrade && m_activeTrade.ticket != newTicket)
               {
                if(EnableLogging)
@@ -1104,12 +1126,19 @@ private:
 
                bool wasReversing    = m_reversalInProgress;
                m_reversalInProgress = true;
-               // logExit=false: closing deals need a tick to settle, and
-               // SyncActiveTrade() re-logs the aggregate once flat.
+               // FIX (v5.20): logExit=TRUE. The outgoing basket's exit price,
+               // fees and net P/L must reach the CURRENT session journal and
+               // the email report BEFORE the incoming fill seeds its own
+               // fresh session ID and basket. Deferring this (the old
+               // logExit=false) let the new session overwrite the session ID
+               // first, stranding the closure record in the wrong session.
+               // The closing deals are already settled here because the fill
+               // is confirmed by ResolveFilledPositionTicket() above, so
+               // LogClosedTrade() can find every DEAL_ENTRY_OUT.
                // keepTicket=newTicket: the orphan sweep inside must NOT
                // close the position we are reversing INTO. Without it the
                // sweep would shut the new fill on the same tick it appears.
-               CloseEntireBasket("SAR Reversal", false, newTicket);
+               CloseEntireBasket("SAR Reversal", true, newTicket);
                m_reversalInProgress = wasReversing;
 
                if(EnableLogging)
@@ -1227,28 +1256,57 @@ public:
 
    //+------------------------------------------------------------------+
    //| Re-syncs the active trade from broker positions (init/restart)  |
+   //|                                                                  |
+   //| ORDERING CONTRACT (FIX v5.20 — position hijacking):              |
+   //|   1. If a trade is already tracked AND its ticket is still an    |
+   //|      open position, DO NOTHING. The incumbent stays primary.     |
+   //|   2. Only when the tracked ticket has genuinely disappeared do   |
+   //|      we evaluate the flat transition and clear state.            |
+   //|   3. FindActivePosition() is therefore reached ONLY on a cold    |
+   //|      start (no tracked trade), where it adopts the OLDEST open   |
+   //|      position = Tranche 1.                                       |
+   //|                                                                  |
+   //| Previously this called FindActivePosition(..., tracked)          |
+   //| unconditionally, so a freshly-opened scale-in tranche could be   |
+   //| adopted as the primary and re-seed entry/SL/lot from the wrong   |
+   //| leg — corrupting the basket's geometry mid-trade.                |
    //+------------------------------------------------------------------+
+   bool              IsTrackedTicketOpen(void)
+     {
+      if(!m_hasActiveTrade || m_activeTrade.ticket <= 0)
+         return false;
+      if(!PositionSelectByTicket(m_activeTrade.ticket))
+         return false;
+      return (PositionGetInteger(POSITION_MAGIC) == MagicNumber &&
+              PositionGetString(POSITION_SYMBOL) == m_symbol);
+     }
+
    void              SyncActiveTrade(void)
      {
+      // ---- 1. Incumbent still live -> nothing to do --------------------
+      // This is the hijack guard: an open primary is authoritative and is
+      // never replaced by a newer scale-in tranche.
+      if(IsTrackedTicketOpen())
+         return;
+
       ulong ticket; ENUM_TRADE_DIRECTION dir;
-      ulong tracked = m_hasActiveTrade ? m_activeTrade.ticket : 0;
-      if(FindActivePosition(ticket, dir, tracked))
-        {
-         SeedActiveTradeFromPosition(ticket);
-        }
-      else if(!FindActivePosition(ticket, dir))
+
+      // ---- 2. Tracked ticket gone -> is the account actually flat? -----
+      if(!FindActivePosition(ticket, dir))
         {
          // No position at all -> active -> flat transition = trade closed.
-         // The second call ignores `tracked` so a closed incumbent is
-         // correctly reported flat rather than re-seeded from a tranche.
-         // Suppressed while a reversal is in flight: the reversal owns the
-         // logging and re-logs the aggregate once (m_reversalInProgress).
+         // Suppressed while a legacy reversal is in flight: that path owns
+         // its own logging (see InitiateReversal / CompleteReversal).
          if(m_hasActiveTrade && !m_reversalInProgress)
             LogClosedTrade(m_activeTrade);
          if(m_reversalInProgress) m_reversalInProgress = false;
          m_hasActiveTrade  = false;
          m_activeDirection = DIR_NONE;
+         return;
         }
+
+      // ---- 3. Cold start / flat adoption -> adopt OLDEST (Tranche 1) ---
+      SeedActiveTradeFromPosition(ticket);
      }
 
    //+------------------------------------------------------------------+

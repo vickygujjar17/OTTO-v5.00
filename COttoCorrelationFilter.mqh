@@ -5,7 +5,7 @@
 //|              Suffix-safe (handles broker suffixes like .x)        |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.19"
+#property version   "5.20"
 
 #ifndef __OTTO_CORRELATION_FILTER__
 #define __OTTO_CORRELATION_FILTER__

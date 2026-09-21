@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.19"
+#property version   "5.20"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -117,6 +117,11 @@ public:
       // push below compares against this, so introducing the session SL can never
       // by itself manufacture a difference and trigger a spurious broker write.
       double prevTrailSL = desiredSL;
+      // FIX (v5.20): set when Tranche 3 is added on THIS tick. The ATR-trail
+      // block and the single-ticket broker push are both bypassed for that
+      // one tick so the broker can confirm the protective breakeven stop on
+      // the new ticket before the dynamic trail takes over.
+      bool t3OpenedThisTick = false;
       // FIX (v5.15): after a T2/T3 ApplyUnifiedSL moved the BASKET stop, the
       // primary struct field (trade.currentTrailSL) lags behind the real
       // ratcheted value. Re-seed from the authoritative session SL so the
@@ -195,10 +200,19 @@ public:
              {
               m_orderManager.ApplyUnifiedSL(safeBE);
               m_orderManager.LogGroupStop("Tranche 3 (+3.0R) - Executed (Trail Pending)", safeBE);
+              // FIX (v5.20): bypass the trail/push blocks below for THIS tick
+              // only. The broker needs a moment to register the protective
+              // breakeven stop attached to the brand-new ticket; pushing the
+              // tight ATR trail in the same tick can be rejected as
+              // INVALID_STOPS or, worse, land on the fill and stop the whole
+              // basket out on entry. The normal ATR trail takes over on the
+              // next tick, once the initial stop is confirmed.
+              t3OpenedThisTick = true;
              }
         }
       // Dynamic ATR Trail at +3.0R: apply SAME trailing SL to every ticket
-      if(currentRR >= InpLock3RRR)
+      // Skipped entirely on the tick Tranche 3 was added (see above).
+      if(currentRR >= InpLock3RRR && !t3OpenedThisTick)
         {
          m_orderManager.ApplyUnifiedSL(desiredSL);
          // FIX (v5.15): mirror the AUTHORITATIVE ratcheted value back into the
@@ -213,8 +227,11 @@ public:
       // When a multi-tranche basket is active, ApplyUnifiedSL() above already
       // manages every basket ticket, so the single-ticket ModifySL() below is
       // skipped to avoid a conflicting double-modification of the primary.
+      // FIX (v5.20): also skipped on the tick Tranche 3 opened, for the same
+      // reason as the trail block above -- no stop write races the broker's
+      // confirmation of the new ticket's protective stop.
       double point = SymbolInfoDouble(m_symbol, SYMBOL_POINT);
-      if(m_orderManager.GetBasketCount() <= 1)
+      if(m_orderManager.GetBasketCount() <= 1 && !t3OpenedThisTick)
         {
          // FIX (v5.16): compare against prevTrailSL (the value BEFORE the
          // session-SL re-seed) so the push reflects genuine local movement
@@ -228,7 +245,7 @@ public:
               }
            }
         }
-      else if(currentRR >= InpLock3RRR)
+      else if(currentRR >= InpLock3RRR && !t3OpenedThisTick)
          m_trailActivations++;
       m_tradesManaged++;
      }

@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script v5.19 Master Build Port             |
+//|                    Pine Script v5.20 Master Build Port             |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.19"
+#property version   "5.20"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -80,7 +80,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.19 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.20 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -94,6 +94,31 @@ int OnInit(void)
      }
    g_isHedging = true;
    Print("[INIT] Account type: HEDGING");
+
+   // --- GOLD DEPLOYMENT KILL-SWITCH ---------------------------------
+   // OTTO is strictly forbidden from executing on Gold. The instrument's
+   // volatility profile and tick-value characteristics invalidate the
+   // Pine-derived separation/sizing model this build is calibrated on, and
+   // its stop distances routinely breach broker minimums -- so a Gold chart
+   // is refused outright rather than run in a degraded mode.
+   // Correlation tracking for Gold positions held OUTSIDE this EA (manual
+   // or other-magic) remains fully active: COttoCorrelationFilter reads the
+   // broker position book independently of this guard.
+   string symUpper = g_symbol;
+   StringToUpper(symUpper);
+   if(StringFind(symUpper, "XAU") >= 0 || StringFind(symUpper, "GOLD") >= 0)
+     {
+      Print("==============================================================");
+      Print("  FATAL: OTTO is FORBIDDEN from executing on Gold charts.");
+      Print("  Symbol detected: ", g_symbol);
+      Print("  This EA must not trade XAU* / GOLD*." );
+      Print("  Correlation tracking for externally-held Gold positions");
+      Print("  remains active and is unaffected by this refusal.");
+      Print("  Move the EA to a permitted instrument and re-initialise.");
+      Print("==============================================================");
+      return INIT_FAILED;
+     }
+   Print("[INIT] Gold kill-switch: ", g_symbol, " permitted");
 
    Print("[INIT] Balance: ", DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2),
          " | Equity: ", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2),

@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script v5.12 Master Build Port             |
+//|                    Pine Script v5.13 Master Build Port             |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.12"
+#property version   "5.13"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -80,7 +80,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.12 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.13 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -406,8 +406,10 @@ void OnTick(void)
         {
          g_totalDD_Halted = true;
          g_orderManager.CancelAllPendingOrders();
-         if(g_orderManager.HasActiveTrade())
-            g_orderManager.ForceClose(g_orderManager.GetActiveTrade().ticket);
+         // Close the WHOLE basket, not just the primary ticket: hedging-mode
+         // pyramid tranches are separate positions and must not survive the halt.
+         if(g_orderManager.HasActiveTrade() || g_orderManager.CountOpenPositions() > 0)
+            g_orderManager.CloseEntireBasket("Total DD Halt");
          Print("==============================================================");
          Print("  FATAL: TOTAL DRAWDOWN LIMIT REACHED â€” EA PERMANENTLY HALTED");
          Print("  DD: ", DoubleToString(totalDD, 2), "% â‰¥ ", SafetyTotalDDLimit, "%");

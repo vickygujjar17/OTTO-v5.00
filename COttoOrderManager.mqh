@@ -4,7 +4,7 @@
 //|              OTTO EA ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.12"
+#property version   "5.13"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -657,9 +657,16 @@ private:
       m_reversalStartTime   = TimeCurrent();
       m_reversalInProgress  = true;
       if(EnableLogging)
-         Print("[OrderManager] REVERSAL INITIATED: closing ticket=", ticket,
+         Print("[OrderManager] REVERSAL INITIATED: closing basket (primary ticket=", ticket, ")",
                " | Target: ", (m_reversalTargetDir == DIR_LONG ? "LONG" : "SHORT"));
-      return ClosePosition(ticket);
+      // Close the ENTIRE basket, not just the primary ticket. MT5 hedging
+      // mode keeps pyramid tranches as separate positions; closing only
+      // the primary would orphan tranches 2/3 with no SL management.
+      // logExit=false: the closing deals need a tick to settle in history,
+      // and SyncActiveTrade() re-logs the aggregate once the basket is flat
+      // (m_reversalInProgress was true when it ran, so it will not double-log).
+      CloseEntireBasket("SAR Reversal", false);
+      return true;
      }
 
    //+------------------------------------------------------------------+
@@ -818,16 +825,74 @@ private:
    //| Logs a structured EXIT when an active trade closes. Uses history  |
    //| to find the closing deal for exit price / fees / gross profit.  |
    //+------------------------------------------------------------------+
-   void                    LogClosedTrade(const SActiveTrade &trade)
+   void                    LogClosedTrade(const SActiveTrade &trade, string reason = "Trade Closed")
      {
       if(m_journal == NULL) return;
+
+      // ---- Basket-aggregated logging -------------------------------
+      // A pyramid basket is closed as a UNIT (unified SL / reversal /
+      // DD halt). Aggregating the tranches into ONE exit record keeps
+      // the journal in 1:1 correspondence with the actual trade, and
+      // guarantees no tranche is left unlogged (orphaned) when more
+      // than one position was open.
+      if(m_basketCount > 0)
+        {
+         int    logged   = 0;
+         double exitPx   = 0.0;
+         double aggGross = 0.0;
+         double aggComm  = 0.0;
+         double aggSwap  = 0.0;
+         double totalLot = 0.0;
+
+         for(int b = 0; b < m_basketCount; b++)
+           {
+            ulong bt = m_basket[b].ticket;
+            if(bt <= 0) continue;
+
+            // Scan deal history for THIS tranche's closing deal
+            for(int i = HistorySelect(0, TimeCurrent()) - 1; i >= 0; i--)
+              {
+               ulong dt = HistoryDealGetTicket(i);
+               if(dt <= 0) continue;
+               if(HistoryDealGetInteger(dt, DEAL_POSITION_ID) != (long)bt) continue;
+               if(HistoryDealGetInteger(dt, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+
+               // Reference exit price is Tranche 1's (the primary leg)
+               if(logged == 0)
+                  exitPx = HistoryDealGetDouble(dt, DEAL_PRICE);
+
+               aggGross += HistoryDealGetDouble(dt, DEAL_PROFIT);
+               aggComm  += HistoryDealGetDouble(dt, DEAL_COMMISSION);
+               aggSwap  += HistoryDealGetDouble(dt, DEAL_SWAP);
+               totalLot += m_basket[b].size;
+               logged++;
+               break;
+              }
+           }
+
+         if(logged > 0)
+           {
+            if(totalLot <= 0.0) totalLot = trade.lotSize;
+            m_journal.LogExit(m_basket[0].ticket, m_basketDir, m_primaryEntry, exitPx,
+                              totalLot, aggGross, aggComm, aggSwap, m_basketOpenTime, reason);
+            if(EnableLogging)
+               Print("[OrderManager] Basket EXIT logged: ", logged, " tranche(s)",
+                     " | lots=", DoubleToString(totalLot, 2),
+                     " | net=", DoubleToString(aggGross + aggComm + aggSwap, 2),
+                     " | ", reason);
+            return;
+           }
+         // No closing deals found yet (history lag) -> fall through to
+         // the single-trade path below rather than logging nothing.
+        }
+
+      // ---- Single-trade logging (no basket attached) ---------------
       if(trade.ticket <= 0) return;
 
       double exitPrice  = 0.0;
       double commission = 0.0;
       double swap       = 0.0;
       double gross      = 0.0;
-      string reason     = "Trade Closed";
 
       // Scan deal history for the closing deal for this position
       for(int i = HistorySelect(0, TimeCurrent()) - 1; i >= 0; i--)
@@ -844,9 +909,8 @@ private:
          break;
         }
 
-      if(m_journal != NULL)
-         m_journal.LogExit(trade.ticket, trade.direction, trade.entryPrice, exitPrice,
-                           trade.lotSize, gross, commission, swap, trade.openTime, reason);
+      m_journal.LogExit(trade.ticket, trade.direction, trade.entryPrice, exitPrice,
+                        trade.lotSize, gross, commission, swap, trade.openTime, reason);
      }
 
 
@@ -1148,6 +1212,15 @@ public:
    //| Getters                                                          |
    //+------------------------------------------------------------------+
    bool              HasActiveTrade(void) const { return m_hasActiveTrade; }
+
+   //+------------------------------------------------------------------+
+   //| Public count of this EA's open positions (magic + symbol).       |
+   //| Exposes the private CountMyPositions() scan so callers such as   |
+   //| the drawdown halt can detect tranches even when m_hasActiveTrade |
+   //| has already been cleared.                                        |
+   //+------------------------------------------------------------------+
+   int               CountOpenPositions(void) { return CountMyPositions(); }
+
    ENUM_TRADE_DIRECTION GetActiveDirection(void) const { return m_activeDirection; }
    SActiveTrade      GetActiveTrade(void) const { return m_activeTrade; }
    bool              GetActiveTradeRef(SActiveTrade &outTrade) const
@@ -1309,6 +1382,72 @@ public:
       m_nextTranche = 2;
       m_hasActiveTrade = false;
       m_activeDirection = DIR_NONE;
+     }
+
+   //+------------------------------------------------------------------+
+   //| Closes EVERY open position belonging to this basket as a UNIT.   |
+   //| MT5 hedging mode allows several concurrent positions on one      |
+   //| symbol; closing only the primary ticket would leave the pyramid  |
+   //| tranches ORPHANED (open, unmanaged, untracked). This routine:    |
+   //|   1. closes every tracked tranche in m_basket[]                  |
+   //|   2. closes any remaining broker position for this magic/symbol  |
+   //|      that is NOT tracked (orphan sweep - survives restarts)      |
+   //|   3. logs ONE aggregated exit record via LogClosedTrade()        |
+   //|   4. clears basket state so the next cycle starts flat           |
+   //| Set logExit=false when the caller needs the closing deals to     |
+   //| settle in history first (e.g. a reversal, which re-logs the      |
+   //| aggregate via SyncActiveTrade on a later tick).                  |
+   //+------------------------------------------------------------------+
+   void              CloseEntireBasket(string reason = "Force Close", bool logExit = true)
+     {
+      if(!m_hasActiveTrade && m_basketCount == 0 && CountMyPositions() == 0)
+         return;
+
+      int closed = 0;
+
+      // ---- 1. Tracked tranches -------------------------------------
+      for(int b = 0; b < m_basketCount; b++)
+        {
+         ulong bt = m_basket[b].ticket;
+         if(bt <= 0) continue;
+         if(!PositionSelectByTicket(bt)) continue;
+         if(ClosePosition(bt)) closed++;
+        }
+
+      // ---- 2. Orphan sweep (untracked positions for this magic) -----
+      // Guards against baskets rebuilt incomplete after a restart, or a
+      // tranche that opened between the last Update() and this call.
+      for(int p = PositionsTotal() - 1; p >= 0; p--)
+        {
+         if(!PositionGetTicket(p)) continue;
+         if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         ulong orphan = (ulong)PositionGetInteger(POSITION_TICKET);
+         if(orphan <= 0) continue;
+         if(ClosePosition(orphan)) closed++;
+        }
+
+      if(closed > 0)
+         Print("[OrderManager] CloseEntireBasket: closed ", closed, " position(s) | ", reason);
+
+      // ---- 3. One aggregated journal record -------------------------
+      // m_basket[] is still populated here on purpose: LogClosedTrade()
+      // needs the tranche tickets to sum the per-tranche closing deals.
+      if(logExit)
+         LogClosedTrade(m_activeTrade, reason);
+
+      // ---- 4. Reset state so the next cycle starts flat --------------
+      // m_hasActiveTrade is deliberately left intact when the caller will
+      // still need the flat-transition log (reversal path); ClearBasket()
+      // is deferred there so the tranche tickets survive for aggregation.
+      if(logExit)
+         ClearBasket();
+      else
+        {
+         ArrayResize(m_basket, 0, 3);
+         m_basketCount = 0;
+         m_nextTranche = 2;
+        }
      }
   };
 

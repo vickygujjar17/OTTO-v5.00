@@ -6,7 +6,7 @@
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
 #property version   "5.27"
-#property description "OTTO v5.27 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus)"
+#property description "OTTO v5.27 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -299,6 +299,31 @@ input bool     InpUseExternalAnchors = true;   // Factor untraded DXY / XAUUSD m
 input int      InpAnchorTF           = PERIOD_M15; // Anchor candle timeframe (M15 default)
 input bool     InpCancelOpposingPendings = true; // Cancel resting pendings against consensus
 
+input group "══════════════════════════════════════════════════"
+input group "  [10] LIVE QUORUM CONTRADICTION GUARD"
+input group "══════════════════════════════════════════════════"
+// v5.27: LIVE 4-PAIR QUORUM CONTRADICTION GUARD.
+// Measures whether a currency is driven by a quorum of its peer pairs on
+// InpQuorumTimeframe, then liquidates / cancels anything positioned against
+// that live majority.
+//
+// CONFIRMATION GATE (active trades only): the quorum verdict must be
+// corroborated by the traded pair OWN live direction before a position is
+// closed. A bare quorum hit is NOT sufficient. Without that second
+// condition any broad dollar move trips the OR rule on a long EURUSD
+// (quoteQ >= 1) even while EUR itself strengthens, liquidating sound
+// trades on peer noise.
+//
+// RESTING LIMITS ARE NOT GATED: they are cancelled on the quorum verdict
+// alone, because protecting margin ahead of a fill matters more than
+// confirmation latency.
+input bool     InpEnableQuorumGuard      = true;   // Master toggle for 4-pair quorum
+input bool     InpQuorumCloseActiveTrade = false;  // Close active trades if quorum opposes
+input bool     InpQuorumCancelLimits     = true;   // Cancel resting limits if quorum opposes
+input int      InpQuorumMinPairs         = 4;      // Min agreeing peer pairs (4 of 7)
+input ENUM_TIMEFRAMES InpQuorumTimeframe = PERIOD_M15; // Live peer direction TF
+input double   InpQuorumMinCorrelation   = 50.0;   // Min affinity % to inherit peer quorum
+
 //+------------------------------------------------------------------+
 //| Global Constants                                                 |
 //+------------------------------------------------------------------+
@@ -306,6 +331,8 @@ input bool     InpCancelOpposingPendings = true; // Cancel resting pendings agai
 #define MAX_ATR_HISTORY   32        // ATR history buffer for the 8-bar veto scan
 #define OTTO_CURRENCY_COUNT 8       // 8-currency universe (USD..JPY)
 #define OTTO_PAIR_COUNT     28      // 28 FX crosses derived from those 8
+#define OTTO_QUORUM_FX_COUNT 28     // m_allSymbols[0..27] FX only; [28] XAUUSD excluded
+#define OTTO_QUORUM_MIN_AGE_SEC 60  // Min trade age before quorum liquidation
 
 //+------------------------------------------------------------------+
 #endif  // __OTTO_DEFINES__

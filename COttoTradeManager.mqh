@@ -28,6 +28,12 @@ private:
    int                  m_trailActivations;
    int                  m_stopsHit;
 
+   // v5.27: quorum contradiction guard state.
+   COttoCorrelationFilter *m_correlationFilter;
+   // One-shot re-arm latch. CloseEntireBasket() can decline a request, and
+   // without this the guard would re-fire every tick and flood the journal.
+   bool                 m_quorumFireLatched;
+
    double            GetCurrentATR(void)
      { return m_blockManager.GetATR(); }
 
@@ -80,13 +86,16 @@ public:
    COttoTradeManager(void)
      {
       m_symbol=""; m_riskManager=NULL; m_orderManager=NULL; m_blockManager=NULL;
+      m_correlationFilter=NULL; m_quorumFireLatched=false;
       m_tradesManaged=0; m_halfRiskTriggers=0; m_breakevenTriggers=0; m_trailActivations=0; m_stopsHit=0;
      }
    ~COttoTradeManager(void) { }
 
-   bool            Initialize(string symbol, COttoRiskManager *rm, COttoOrderManager *om, COttoBlockManager *bm)
+   bool            Initialize(string symbol, COttoRiskManager *rm, COttoOrderManager *om,
+                             COttoBlockManager *bm, COttoCorrelationFilter *cf)
      {
       m_symbol=symbol; m_riskManager=rm; m_orderManager=om; m_blockManager=bm;
+      m_correlationFilter=cf;
       return true;
      }
 
@@ -103,6 +112,32 @@ public:
       if(primaryEntry <= 0.0) primaryEntry = trade.entryPrice;
       ENUM_TRADE_DIRECTION dir = m_orderManager.GetBasketDir();
       if(dir == DIR_NONE) dir = trade.direction;
+
+      // ---- v5.27 QUORUM CONTRADICTION GUARD ---------------------------
+      // Placed ahead of ALL trailing logic: once the 4-pair quorum has turned
+      // against this position AND the pair itself is already moving against
+      // it, there is nothing left for the trailing ladder to manage.
+      //
+      // GetBasketOpenTime() gate: a fresh basket stays invisible to the guard
+      // for OTTO_QUORUM_MIN_AGE_SEC. Without it a fill landing into an
+      // already-opposing quorum would be killed seconds after opening.
+      if(InpEnableQuorumGuard && InpQuorumCloseActiveTrade && !m_quorumFireLatched)
+        {
+         datetime opened = m_orderManager.GetBasketOpenTime();
+         if(opened > 0 && (TimeCurrent() - opened) >= OTTO_QUORUM_MIN_AGE_SEC)
+           {
+            int qDir = (dir == DIR_LONG) ? 1 : -1;
+            string qReason = "";
+            if(m_correlationFilter != NULL &&
+               m_correlationFilter.IsSymbolOpposingQuorum(m_symbol, qDir, qReason))
+              {
+               m_quorumFireLatched = true;
+               Print("[TradeManager] QUORUM LIQUIDATION | ", qReason);
+               m_orderManager.CloseEntireBasket(qReason, true);
+               return;   // basket is gone - skip the trailing ladder
+              }
+           }
+        }
 
       double atr = GetCurrentATR();
       if(atr <= 0) return;
@@ -302,6 +337,10 @@ public:
       m_orderManager.SetActiveTradeStep(step);
       m_orderManager.SetActiveTradeHighWatermark(price);
      }
+
+   // Re-arms the latch when the book is flat, so the guard fires at most once
+   // per basket instead of once per tick.
+   void              ArmQuorumGuard(void)  { m_quorumFireLatched = false; }
 
    int               GetTradesManaged(void) const     { return m_tradesManaged; }
    int               GetHalfRiskTriggers(void) const  { return m_halfRiskTriggers; }

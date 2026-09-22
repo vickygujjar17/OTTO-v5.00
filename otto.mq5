@@ -270,7 +270,9 @@ int OnInit(void)
 
 
    // --- Trade Manager ---
-   if(!g_tradeManager.Initialize(g_symbol, &g_riskManager, &g_orderManager, &g_blockManager))
+   // v5.27: the filter is injected so Update() can run the quorum guard.
+   if(!g_tradeManager.Initialize(g_symbol, &g_riskManager, &g_orderManager, &g_blockManager,
+                               &g_correlationFilter))
      {
       Print("[INIT] FATAL: Trade Manager init failed");
       return INIT_FAILED;
@@ -707,6 +709,13 @@ void OnTick(void)
    // Strict outlier cancellation: drop our own pendings that now fight
    // the refreshed consensus.
    g_orderManager.CancelOpposingConsensusOrders();
+
+   // v5.27: LIVE 4-PAIR QUORUM sweep. Independent of the consensus veto above:
+   // that one reads the portfolio vector snapshot, this one counts live peer
+   // agreement on InpQuorumTimeframe. Runs UNGATED for pendings only - a
+   // resting order that would fill into a multi-pair reversal is pulled on the
+   // quorum verdict alone, before it opens exposure.
+   g_orderManager.CancelQuorumOpposingOrders();
 
    // ================================================================
    // STEP 4: ORDER PLACEMENT â€” Pine-gated limit orders for armed blocks

@@ -387,6 +387,216 @@ private:
 
 
 public:
+
+   //+------------------------------------------------------------------+
+   //| v5.27 - Quorum helpers: live direction of one pair root        |
+   //| Resolves the broker symbol for an FX root via the same         |
+   //| Market-Watch discovery used by the v5.26 macro anchors, then    |
+   //| compares Bid against the OPEN of the CURRENTLY FORMING bar on   |
+   //| the requested timeframe.                                        |
+   //| Returns +1 up, -1 down, 0 when the symbol is absent / no data.  |
+   //+------------------------------------------------------------------+
+   int               GetLiveSymbolDirection(const string root, const ENUM_TIMEFRAMES tf)
+     {
+      string real = ResolveAnchorSymbol(root, "");
+      if(real == "") return 0;          // broker does not offer this root
+      double op = iOpen(real, tf, 0);
+      if(op <= 0.0) return 0;            // not selected / history not ready
+      double bid = SymbolInfoDouble(real, SYMBOL_BID);
+      if(bid <= 0.0) return 0;
+      double diff = bid - op;
+      if(diff > 0.0) return 1;
+      if(diff < 0.0) return -1;
+      return 0;                          // exactly at the open - no verdict
+     }
+
+   //+------------------------------------------------------------------+
+   //| v5.27 - CountCurrencyAgreement                                 |
+   //| Walks the FX universe and tallies how many pairs containing     |
+   //| 'cur' are moving in each direction.                             |
+   //| Base match follows the raw direction; a QUOTE match is INVERTED |
+   //| because a falling EURAUD is AUD strength, not weakness. Without |
+   //| that inversion every cross would vote backwards.                |
+   //| Bounds are OTTO_QUORUM_FX_COUNT (28) so XAUUSD - index 28 of    |
+   //| m_allSymbols[] - never votes: it is a metal, not an FX cross,   |
+   //| and would otherwise add a bogus extra vote to USD.              |
+   //+------------------------------------------------------------------+
+   void              CountCurrencyAgreement(const string cur, const ENUM_TIMEFRAMES tf,
+                                          int &pos, int &neg)
+     {
+      pos = 0;
+      neg = 0;
+      for(int i = 0; i < OTTO_QUORUM_FX_COUNT; i++)
+        {
+         string clean = m_allSymbols[i];
+         string base  = StringSubstr(clean, 0, 3);
+         string quote = StringSubstr(clean, 3, 3);
+         int dir = 0;
+         if(base == cur)       dir = GetLiveSymbolDirection(clean, tf);
+         else if(quote == cur) dir = -GetLiveSymbolDirection(clean, tf);
+         else continue;                   // pair does not contain 'cur'
+         if(dir > 0)      pos++;
+         else if(dir < 0) neg++;
+        }
+     }
+
+   //+------------------------------------------------------------------+
+   //| v5.27 - GetCurrencyStrengthQuorum                             |
+   //| Direct 4-of-7 verdict for one currency.                         |
+   //| +1 when >= InpQuorumMinPairs peers agree upward, -1 downward,   |
+   //| 0 when the peers disagree / fail to reach quorum.               |
+   //+------------------------------------------------------------------+
+   int               GetCurrencyStrengthQuorum(const string cur, const ENUM_TIMEFRAMES tf)
+     {
+      int pos = 0, neg = 0;
+      CountCurrencyAgreement(cur, tf, pos, neg);
+      if(pos >= InpQuorumMinPairs) return 1;
+      if(neg >= InpQuorumMinPairs) return -1;
+      return 0;
+     }
+
+   //+------------------------------------------------------------------+
+   //| v5.27 - GetQuorumWithAffinity                                 |
+   //| Cross-affinity quorum flow. When a currency has no quorum of   |
+   //| its OWN, it may INHERIT the verdict of a strongly correlated    |
+   //| peer - but only while that peer affinity clears the configured  |
+   //| floor: m_affinity[c][peer] * 100.0 >= InpQuorumMinCorrelation.  |
+   //| At the default 50.0 that admits AUD/NZD (85) and EUR/CHF (80)   |
+   //| while rejecting CHF/JPY (40), so inheritance stays a            |
+   //| high-conviction bridge rather than broad propagation.           |
+   //| viaPeer receives the donor code ("" when no inheritance).      |
+   //+------------------------------------------------------------------+
+   int               GetQuorumWithAffinity(const string cur, const ENUM_TIMEFRAMES tf,
+                                           string &viaPeer)
+     {
+      viaPeer = "";
+      int direct = GetCurrencyStrengthQuorum(cur, tf);
+      if(direct != 0) return direct;
+
+      int ic = CurrencyIndex(cur);
+      if(ic < 0) return 0;                // unknown code - never inherit
+
+      for(int peer = 0; peer < OTTO_CURRENCY_COUNT; peer++)
+        {
+         if(peer == ic) continue;
+         double aff = m_affinity[ic][peer];
+         if(aff <= 0.0) continue;
+         if(aff * 100.0 < InpQuorumMinCorrelation) continue;
+         int pv = GetCurrencyStrengthQuorum(m_currencies[peer], tf);
+         if(pv != 0)
+           {
+            viaPeer = m_currencies[peer];
+            return pv;
+           }
+        }
+      return 0;
+     }
+
+   //+------------------------------------------------------------------+
+   //| v5.27 - IsSymbolOpposingQuorum                                |
+   //| The GATED verdict, used for ACTIVE TRADE liquidation.            |
+   //|                                                                  |
+   //| LONG  is opposed when baseQ <= -1 OR quoteQ >= 1.                |
+   //| SHORT is opposed when baseQ >=  1 OR quoteQ <= -1.               |
+   //|                                                                  |
+   //| That OR rule alone is too eager: on a long EURUSD any broad      |
+   //| dollar trend satisfies quoteQ >= 1 even while EUR strengthens.   |
+   //| So a SECOND independent condition must also hold - the pair the  |
+   //| trade is actually in must ALREADY be moving against it:          |
+   //| diff < 0 for LONG, diff > 0 for SHORT.                           |
+   //|                                                                  |
+   //| Requiring both keeps a real multi-pair reversal lethal while     |
+   //| refusing to cut a position on peer noise alone.                  |
+   //+------------------------------------------------------------------+
+   bool              IsSymbolOpposingQuorum(const string symbol, const int dir,
+                                           string &outReason)
+     {
+      outReason = "";
+      if(dir == 0) return false;
+      if(!InpEnableQuorumGuard) return false;
+      if(!InpQuorumCloseActiveTrade) return false;
+
+      string clean = CleanSymbol(symbol);
+      if(StringLen(clean) != 6) return false;   // anchors / indices out of scope
+      string base  = StringSubstr(clean, 0, 3);
+      string quote = StringSubstr(clean, 3, 3);
+
+      ENUM_TIMEFRAMES tf = InpQuorumTimeframe;
+      string viaB = "", viaQ = "";
+      int baseQ  = GetQuorumWithAffinity(base,  tf, viaB);
+      int quoteQ = GetQuorumWithAffinity(quote, tf, viaQ);
+
+      bool quorumHit = false;
+      if(dir > 0)  quorumHit = (baseQ <= -1 || quoteQ >= 1);
+      else         quorumHit = (baseQ >=  1 || quoteQ <= -1);
+      if(!quorumHit) return false;
+
+      int selfDir = GetLiveSymbolDirection(clean, tf);
+      bool selfAgainst = (dir > 0) ? (selfDir < 0) : (selfDir > 0);
+      if(!selfAgainst) return false;
+
+      int bP = 0, bN = 0, qP = 0, qN = 0;
+      CountCurrencyAgreement(base,  tf, bP, bN);
+      CountCurrencyAgreement(quote, tf, qP, qN);
+      string bTag = (baseQ  != 0) ? StringFormat("%s %s (+%d/-%d)%s", base,
+                        (baseQ > 0 ? "bullish" : "bearish"), bP, bN,
+                        (viaB != "" ? " via " + viaB : "")) : "";
+      string qTag = (quoteQ != 0) ? StringFormat("%s %s (+%d/-%d)%s", quote,
+                        (quoteQ > 0 ? "bullish" : "bearish"), qP, qN,
+                        (viaQ != "" ? " via " + viaQ : "")) : "";
+      string sep = (bTag != "" && qTag != "") ? " | " : "";
+      outReason = StringFormat("%d-Pair Quorum Contradiction: %s%s%s | %s live %s",
+                     InpQuorumMinPairs, bTag, sep, qTag, clean,
+                     (selfDir > 0 ? "bullish" : "bearish"));
+      return true;
+     }
+
+   //+------------------------------------------------------------------+
+   //| v5.27 - IsPendingOpposingQuorum                               |
+   //| The UNGATED verdict, used for RESTING LIMIT cancellations.      |
+   //| Limits are pulled on the quorum verdict alone - no self-         |
+   //| confirmation - because a pending that would fill into a          |
+   //| multi-pair reversal must be pulled BEFORE it opens exposure.     |
+   //| Confirmation latency is a liability here, not a safeguard.       |
+   //+------------------------------------------------------------------+
+   bool              IsPendingOpposingQuorum(const string symbol, const int dir,
+                                            string &outReason)
+     {
+      outReason = "";
+      if(dir == 0) return false;
+      if(!InpEnableQuorumGuard) return false;
+      if(!InpQuorumCancelLimits) return false;
+
+      string clean = CleanSymbol(symbol);
+      if(StringLen(clean) != 6) return false;
+      string base  = StringSubstr(clean, 0, 3);
+      string quote = StringSubstr(clean, 3, 3);
+
+      ENUM_TIMEFRAMES tf = InpQuorumTimeframe;
+      string viaB = "", viaQ = "";
+      int baseQ  = GetQuorumWithAffinity(base,  tf, viaB);
+      int quoteQ = GetQuorumWithAffinity(quote, tf, viaQ);
+
+      bool hit = false;
+      if(dir > 0)  hit = (baseQ <= -1 || quoteQ >= 1);
+      else         hit = (baseQ >=  1 || quoteQ <= -1);
+      if(!hit) return false;
+
+      int bP = 0, bN = 0, qP = 0, qN = 0;
+      CountCurrencyAgreement(base,  tf, bP, bN);
+      CountCurrencyAgreement(quote, tf, qP, qN);
+      string bTag = (baseQ  != 0) ? StringFormat("%s %s (+%d/-%d)%s", base,
+                        (baseQ > 0 ? "bullish" : "bearish"), bP, bN,
+                        (viaB != "" ? " via " + viaB : "")) : "";
+      string qTag = (quoteQ != 0) ? StringFormat("%s %s (+%d/-%d)%s", quote,
+                        (quoteQ > 0 ? "bullish" : "bearish"), qP, qN,
+                        (viaQ != "" ? " via " + viaQ : "")) : "";
+      string sep = (bTag != "" && qTag != "") ? " | " : "";
+      outReason = StringFormat("%d-Pair Quorum Opposed (pending): %s%s%s",
+                     InpQuorumMinPairs, bTag, sep, qTag);
+      return true;
+     }
+
    //+------------------------------------------------------------------+
    //| Constructor — populate the 28-pair + gold symbol universe        |
    //+------------------------------------------------------------------+

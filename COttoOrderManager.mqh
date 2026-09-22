@@ -1577,6 +1577,71 @@ public:
    //| orders, because every EA instance shares MagicNumber and thus any  |
    //| instance may legitimately clean up any stale opposing order.       |
    //+------------------------------------------------------------------+
+   //+------------------------------------------------------------------+
+   //| v5.27 - CancelQuorumOpposingOrders                             |
+   //| Pulls any of OUR resting pendings whose direction the LIVE       |
+   //| 4-pair quorum already contradicts.                               |
+   //|                                                                  |
+   //| Deliberately UNGATED: unlike active trades, a pending is pulled  |
+   //| on the quorum verdict ALONE, with no self-confirmation from the  |
+   //| pair's own live direction. A resting order that would fill into a |
+   //| multi-pair reversal must be gone BEFORE it opens exposure -       |
+   //| confirmation latency is a liability here, not a safeguard.        |
+   //|                                                                  |
+   //| Distinct from the v5.26 consensus sweep: that one measures the    |
+   //| portfolio-wide normalized vector, this one counts live peer       |
+   //| agreement on InpQuorumTimeframe. Both may cancel a given ticket;  |
+   //| whichever runs first wins and the other simply finds it gone.     |
+   //+------------------------------------------------------------------+
+   void              CancelQuorumOpposingOrders(void)
+     {
+      if(!InpEnableQuorumGuard) return;
+      if(!InpQuorumCancelLimits) return;
+      if(m_correlationFilter == NULL) return;
+
+      for(int i = OrdersTotal() - 1; i >= 0; i--)
+        {
+         ulong ticket = OrderGetTicket(i);
+         if(ticket <= 0) continue;
+         if(!OrderSelect(ticket)) continue;
+         if(OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
+
+         ENUM_ORDER_TYPE ot = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+         ENUM_TRADE_DIRECTION dir = DIR_NONE;
+         if(ot == ORDER_TYPE_BUY_LIMIT || ot == ORDER_TYPE_BUY_STOP)   dir = DIR_LONG;
+         if(ot == ORDER_TYPE_SELL_LIMIT || ot == ORDER_TYPE_SELL_STOP) dir = DIR_SHORT;
+         if(dir == DIR_NONE) continue;
+
+         string sym = OrderGetString(ORDER_SYMBOL);
+         int qDir = (dir == DIR_LONG) ? 1 : -1;
+         string reason = "";
+         if(!m_correlationFilter.IsPendingOpposingQuorum(sym, qDir, reason)) continue;
+
+         if(DeleteOrder(ticket))
+           {
+            if(EnableLogging)
+               Print("[OrderManager] QUORUM CANCEL: ticket ", ticket, " ", sym,
+                     (dir == DIR_LONG ? " LONG" : " SHORT"), " | ", reason);
+
+            // Release any block still holding this ticket so the array can
+            // free the struct and the duplicate shield stays consistent.
+            int bi = m_blockManager.FindBlockIndexByTicket(ticket);
+            if(bi >= 0)
+              {
+               SSniperBlock mod;
+               if(m_blockManager.GetBlockAt(bi, mod))
+                 {
+                  mod.limitOrderTicket  = 0;
+                  mod.pendingOrderCancel = false;
+                  mod.isVetoed          = true;
+                  mod.vetoReason        = VETO_CORRELATION;
+                  m_blockManager.SetBlockAt(bi, mod);
+                 }
+              }
+           }
+        }
+     }
+
    void              CancelOpposingConsensusOrders(void)
      {
       if(!InpCancelOpposingPendings) return;
@@ -1872,6 +1937,11 @@ public:
                DoubleToString(newSL, _Digits), " | session SL retained at ",
                DoubleToString(m_sessionSL, _Digits), " (will retry next tick)");
      }
+
+   // v5.27: when the current basket was opened. The quorum guard refuses to
+   // fire inside OTTO_QUORUM_MIN_AGE_SEC of this stamp so a fresh fill is not
+   // killed before its entry thesis has had a bar to work. 0 = no basket.
+   datetime          GetBasketOpenTime(void) const { return m_basketOpenTime; }
 
    string            GetSessionID(void) const { return m_sessionID; }
    double            GetSessionSL(void) const { return m_sessionSL; }

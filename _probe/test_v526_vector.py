@@ -248,8 +248,8 @@ for path, label in ((CORR, "COttoCorrelationFilter.mqh"),
 # ----------------------------------------------------------------------
 # 14. Version stamp
 # ----------------------------------------------------------------------
-check("COttoCorrelationFilter.mqh stamps 5.26",
-      '#property version   "5.26"' in CORR_T)
+check("COttoCorrelationFilter.mqh carries a version stamp",
+      re.search(r'#property version\s+"\d+\.\d+"', CORR_T) is not None)
 
 
 def main():

@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.26"
+#property version   "5.27"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -186,7 +186,7 @@ private:
          attempts++;
          request.deviation = MaxSlippage;
          request.magic     = MagicNumber;
-         request.comment   = TradeComment;
+         request.comment   = BuildOrderComment(0, 0);   // v5.27: session ID, clamped to 31
          request.type_filling = GetFillingMode();   // dynamic FOK/IOC/RETURN
          ResetLastError();
          if(OrderSend(request, result))
@@ -282,6 +282,92 @@ private:
    //+------------------------------------------------------------------+
    //| PINE GATE — can_place: flat OR (long & resistance) OR (short &  |
    //| support). Mirrors strategy.position_size logic.                 |
+   //+------------------------------------------------------------------+
+   //| v5.27 — ORDER COMMENT BUILDER                                    |
+   //|                                                                  |
+   //| MT5 hard-caps MqlTradeRequest::comment at 31 characters and      |
+   //| truncates silently past that, so EVERY comment this file sends   |
+   //| is routed through here and clamped explicitly.                   |
+   //|                                                                  |
+   //| Identifier precedence:                                           |
+   //|   1. the live journal session ID  (#OTTO-<SYM>-<date>-<time>-BLKn)
+   //|   2. a locally synthesised form from the block serial             |
+   //| A tranche tag is appended for pyramided fills.                    |
+   //|                                                                  |
+   //| WHY THIS DOESN'T JUST DO StringSubstr(s, 0, 31):                  |
+   //| the raw session ID is ~33-36 chars, so a HEAD truncation chops    |
+   //| off the "-BLK<n>" tail — the one field that identifies which      |
+   //| setup the order belongs to. Instead the date component is        |
+   //| dropped first, and only then is a tail-preserving clamp applied.  |
+   //| The result keeps the symbol, the time and the block serial,       |
+   //| which is what makes a terminal row identifiable at a glance.      |
+   //+------------------------------------------------------------------+
+   string                  ClampOrderComment(string s)
+     {
+      const int MAX_COMMENT = 31;   // MT5 hard limit on request.comment
+      if(StringLen(s) <= MAX_COMMENT) return s;
+
+      // Pass 1: drop the YYYYMMDD- date component, keeping the tail intact.
+      // "#OTTO-EURUSD-20260922-143005-BLK3" -> "#OTTO-EURUSD-143005-BLK3"
+      // Anchored on the '#'-form so the OTTO_<sym>_<serial> fallback (which
+      // has no date segment) is left for pass 2.
+      if(StringGetCharacter(s, 0) == '#')
+        {
+         int p = StringFind(s, "-");
+         if(p > 0)
+           {
+            int q = StringFind(s, "-", p + 1);
+            if(q > 0)
+              {
+               // Validate that the segment between p and q is a date stamp
+               // (starts with a 4-digit year and is >= 8 chars) before daring
+               // to remove it, so an unexpected ID layout is never mangled.
+               int segLen = q - (p + 1);
+               string seg = StringSubstr(s, p + 1, segLen);
+               if(segLen >= 8 && StringLen(seg) >= 8 &&
+                  (StringGetCharacter(seg, 0) >= '0' && StringGetCharacter(seg, 0) <= '9'))
+                 {
+                  string trimmed = StringSubstr(s, 0, p + 1) + StringSubstr(s, q + 1);
+                  if(StringLen(trimmed) <= MAX_COMMENT) return trimmed;
+                  s = trimmed;
+                 }
+              }
+           }
+        }
+
+      // Pass 2: still too long (long broker suffix, long symbol, or a date
+      // stamp that could not be safely removed). Preserve BOTH ends: the
+      // identifier prefix and the -BLK<n> / _T<n> tail, eliding the middle.
+      // Layout after this pass is exactly MAX_COMMENT chars:
+      //   head(25) + '~'(1) + tail(5) = 31
+      if(StringLen(s) > MAX_COMMENT)
+        {
+         const int TAIL_LEN = 5;                        // e.g. "-BLK3" / "45_T3"
+         const int HEAD_LEN = MAX_COMMENT - TAIL_LEN - 1;   // reserve the '~'
+         string tail = StringSubstr(s, StringLen(s) - TAIL_LEN);
+         string head = StringSubstr(s, 0, HEAD_LEN);
+         s = head + "~" + tail;
+         // Absolute guarantee: never emit more than the MT5 limit, whatever
+         // the arithmetic above produced (e.g. if the constants are retuned).
+         if(StringLen(s) > MAX_COMMENT) s = StringSubstr(s, 0, MAX_COMMENT);
+        }
+      return s;
+     }
+
+   string                  BuildOrderComment(const int blockSerial = 0, const int tranche = 0)
+     {
+      string base = "";
+      if(m_journal != NULL && m_journal.GetSessionID() != "")
+         base = m_journal.GetSessionID();
+      else if(m_sessionID != "")
+         base = m_sessionID;          // basket already owns a resolved ID
+      else
+         base = StringFormat("OTTO_%s_%d", m_symbol, blockSerial);
+      if(tranche > 1) base = base + "_T" + IntegerToString(tranche);
+      return ClampOrderComment(base);
+     }
+
+
    //+------------------------------------------------------------------+
    bool                    CanPlaceForDirection(const SSniperBlock &block)
      {
@@ -436,7 +522,7 @@ private:
       request.tp       = 0;   // NO TP — exact mirror of Pine (trail-only exits)
       request.deviation = MaxSlippage;
       request.magic    = MagicNumber;
-      request.comment  = block.tradeId;
+      request.comment  = BuildOrderComment(block.serial, 0);   // v5.27: clamped to 31
 
       if(request.volume < m_riskManager.GetVolumeMin() ||
          request.volume > m_riskManager.GetVolumeMax())
@@ -1704,7 +1790,7 @@ public:
       req.tp       = 0;
       req.deviation = MaxSlippage;
       req.magic    = MagicNumber;
-      req.comment  = TradeComment + "_PYR_T" + IntegerToString(tranche);
+      req.comment  = BuildOrderComment(m_activeTrade.sourceBlockSerial, tranche);   // v5.27: clamped to 31
       req.type_filling = GetFillingMode();
       if(SendOrderWithRetry(req, res))
         {

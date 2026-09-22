@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.26 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.27 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.26"
-#property description "OTTO v5.26 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus)"
+#property version   "5.27"
+#property description "OTTO v5.27 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -31,12 +31,17 @@ enum ENUM_TRADE_DIRECTION
 
 // Trailing state machine — kept for statistics/logging. The actual SL
 // decisions use the exact Pine v4.70 price formulas (see COttoTradeManager).
+// The R:R values named in these comments are the INPUT DEFAULTS as of v5.27
+// (InpCutRiskRR / InpBreakEvenRR / InpLockProfitRR); the enum members
+// themselves are milestones, not fixed prices, and shift with those inputs.
+// STEP_HALF_RISK is unreachable under v5.27 defaults because breakeven sits at
+// 1.0R, on the same tick, and is the strictly tighter of the two.
 enum ENUM_TRAIL_STEP
   {
    STEP_NONE       = 0,   // Initial SL — no trail yet
-   STEP_HALF_RISK  = 1,   // 1.5R reached — SL tightened to 0.5R
-   STEP_BREAKEVEN  = 2,   // 2.0R reached — SL moved to breakeven
-   STEP_TRAILING   = 3    // 2.7R reached — dynamic ATR trail active
+   STEP_HALF_RISK  = 1,   // InpCutRiskRR reached (1.0R) — SL tightened to 0.5R
+   STEP_BREAKEVEN  = 2,   // InpBreakEvenRR reached (1.0R) — SL to cost-covering BE
+   STEP_TRAILING   = 3    // InpLockProfitRR reached (3.0R) — step lock + ATR trail
   };
 
 // v4.70 veto reasons — each maps to a block deletion path
@@ -220,14 +225,36 @@ input bool     InpPyramidEnable   = true;     // Enable 3-tranche pyramiding (un
 input double   InpRiskT1Pct       = 0.25;     // Tranche 1 risk % of equity
 input double   InpRiskT2Pct       = 0.12;     // Tranche 2 risk % of equity (at +2.0R)
 input double   InpRiskT3Pct       = 0.06;     // Tranche 3 risk % of equity (at +3.0R)
+// v5.27: Tranche 2 is DECOUPLED from InpBreakEvenRR. The two milestones used
+// to share a value (both 2.0), so lowering breakeven to 1.0 would have dragged
+// the T2 scale-in down with it and fired it a full R early. T2 now has its own
+// trigger, defaulted to preserve the historic +2.0R behaviour exactly.
+input double   InpPyramidT2RR     = 2.0;      // Tranche 2 scale-in trigger R:R
 
 input group "══════════════════════════════════════════════════"
 input group "  [5] EXIT & TRAILING (Pine half_risk_rr / be_rr / trail_rr)"
 input group "══════════════════════════════════════════════════"
 input double   InpCutRiskRR   = 1.0;         // Cut Risk in Half at R:R
-input double   InpBreakEvenRR = 2.0;         // Move to Breakeven at R:R
+input double   InpBreakEvenRR = 1.0;         // Move to Cost-Covering Breakeven at R:R
 input double   InpTrailStartRR = 3.0;        // Tranche 3 / dynamic ATR trail activation R:R
 input double   InpLock3RRR      = 3.0;        // Dynamic ATR trail activation (+3.0R, no fixed lock)
+// v5.27 STEP PROFIT LOCK. When price reaches InpLockProfitRR, the stop is
+// ratcheted forward to InpLockProfitTargetRR (expressed in R, measured from
+// primaryEntry). This is a ONE-WAY ratchet: the lock can only ever tighten an
+// existing stop, never loosen it. The Dynamic ATR trail keeps running in
+// parallel and wins whenever it computes a tighter stop than the step lock.
+// Set either input to 0.0 to disable the step lock entirely.
+//
+// MILESTONE GAP: breakeven (InpBreakEvenRR = 1.0) sits exactly 1R below the
+// lock target (InpLockProfitTargetRR = 2.0), which sits exactly 1R below the
+// lock trigger (InpLockProfitRR = 3.0). That spacing is deliberate: a lock
+// target that fell at or below the cost-covering breakeven would be a no-op,
+// because the existing breakeven ratchet already demands a stop at
+// primaryEntry +/- beOffset (a few points of pure friction cost). Locking
+// anything tighter than that would only ever LOOSEN the stop, and the
+// ratchet in ApplyUnifiedSL() would silently refuse it.
+input double   InpLockProfitRR       = 3.0;  // Step profit lock trigger (+3.0R)
+input double   InpLockProfitTargetRR = 2.0;  // Step profit lock target: lock SL at +2.0R
 
 input group "══════════════════════════════════════════════════"
 input group "  [6] RISK MANAGEMENT"
@@ -261,7 +288,7 @@ input double   SafetyTotalDDLimit  = 5.0;     // Hard breach: close all + halt a
 input double   SafetyMaxFloatingLoss = 1.0;   // Hard breach: close all + halt if floating loss hits %
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.26"
+input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.27"
 input group "══════════════════════════════════════════════════"
 // FIX (v5.26): portfolio-wide consensus engine ported from the theoretical
 // Base/Quote + Regional Affinity model. Additive to the per-chart

@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.26"
+#property version   "5.27"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -138,12 +138,30 @@ public:
          double halfRiskSL = primaryEntry - (0.5 * rrUnit);
          if(currentRR >= InpCutRiskRR && desiredSL < halfRiskSL)
            { desiredSL = halfRiskSL; m_halfRiskTriggers++; }
+         // v5.27: BREAKEVEN AT 1:1 (InpBreakEvenRR lowered 2.0 -> 1.0).
+         // Cost-covering, not nominal: beOffset carries commission + swap +
+         // half-spread, so the stop sits fractionally ABOVE true entry and a
+         // trip there returns the account to flat rather than to a loss.
          if(currentRR >= InpBreakEvenRR && desiredSL < primaryEntry)
            {
             double beOffset = CalcBasketFriction(true);
             double beSL = primaryEntry + beOffset;
             if(desiredSL < beSL) { desiredSL = beSL; m_breakevenTriggers++; }
            }
+         // v5.27: STEP PROFIT LOCK (InpLockProfitRR -> InpLockProfitTargetRR).
+         // At +3.0R the hard floor ratchets to +2.0R, banking 2R of open profit.
+         // Guarded strictly forward: the '<' test means the lock can never pull
+         // a stop backwards, which is also why ApplyUnifiedSL()'s ratchet will
+         // accept it unconditionally. Disabled when either input is 0.
+         if(InpLockProfitRR > 0.0 && InpLockProfitTargetRR > 0.0 && currentRR >= InpLockProfitRR)
+           {
+            double lockedSL = primaryEntry + (InpLockProfitTargetRR * rrUnit);
+            if(lockedSL > desiredSL) desiredSL = lockedSL;
+           }
+         // v5.27: DYNAMIC ATR TRAIL runs UNCONDITIONALLY past InpLock3RRR and is
+         // evaluated AFTER the step lock, so the tighter of the two wins on this
+         // same tick. When the ATR trail is near market it supersedes the +2.0R
+         // floor; in a wide-ATR chop the +2.0R floor holds.
          if(currentRR >= InpLock3RRR)
            {
             double dynamicTrail = high0 - (InpTrailATRMultiplier * atr);
@@ -156,12 +174,21 @@ public:
          double halfRiskSL = primaryEntry + (0.5 * rrUnit);
          if(currentRR >= InpCutRiskRR && desiredSL > halfRiskSL)
            { desiredSL = halfRiskSL; m_halfRiskTriggers++; }
+         // v5.27: BREAKEVEN AT 1:1 — mirror of the LONG branch above.
          if(currentRR >= InpBreakEvenRR && desiredSL > primaryEntry)
            {
             double beOffset = CalcBasketFriction(false);
             double beSL = primaryEntry - beOffset;
             if(desiredSL > beSL) { desiredSL = beSL; m_breakevenTriggers++; }
            }
+         // v5.27: STEP PROFIT LOCK — mirror of the LONG branch, '<' mirrored to
+         // '>' so the ratchet again only ever moves the stop toward market.
+         if(InpLockProfitRR > 0.0 && InpLockProfitTargetRR > 0.0 && currentRR >= InpLockProfitRR)
+           {
+            double lockedSL = primaryEntry - (InpLockProfitTargetRR * rrUnit);
+            if(lockedSL < desiredSL) desiredSL = lockedSL;
+           }
+         // v5.27: DYNAMIC ATR TRAIL — mirror of the LONG branch.
          if(currentRR >= InpLock3RRR)
            {
             double dynamicTrail = low0 + (InpTrailATRMultiplier * atr);
@@ -170,10 +197,14 @@ public:
         }
 
       // --- PYRAMID (unified group stop) ---
-      // Tranche 2 at +2.0R (InpBreakEvenRR): add the 0.12% tranche, then move the
-      // unified basket stop to exact Cost-Covering Breakeven (entry +/- beOffset,
-      // where beOffset already accounts for broker commission + swap friction).
-      if(currentRR >= InpBreakEvenRR && m_orderManager.IsPyramidPending(2))
+      // v5.27: Tranche 2 at +2.0R, driven by its OWN input (InpPyramidT2RR).
+      // Previously this read InpBreakEvenRR, which worked only because both
+      // happened to equal 2.0; lowering breakeven to 1.0 for the 1:1 rule would
+      // have silently dragged the T2 scale-in down to 1.0R. The trigger is now
+      // independent: add the InpRiskT2Pct tranche, then move the unified basket
+      // stop to exact Cost-Covering Breakeven (entry +/- beOffset, where
+      // beOffset already accounts for broker commission + swap friction).
+      if(currentRR >= InpPyramidT2RR && m_orderManager.IsPyramidPending(2))
         {
          double beOffset = CalcBasketFriction(dir==DIR_LONG);
          double groupBE = primaryEntry + (dir==DIR_LONG ? beOffset : -beOffset);
@@ -259,9 +290,15 @@ public:
       double price = (trade.direction == DIR_LONG) ? SymbolInfoDouble(m_symbol, SYMBOL_BID) : SymbolInfoDouble(m_symbol, SYMBOL_ASK);
       double rr = (trade.rrUnit > 0) ? ((trade.direction == DIR_LONG ? price - trade.entryPrice : trade.entryPrice - price) / trade.rrUnit) : 0.0;
       ENUM_TRAIL_STEP step = STEP_NONE;
-      if(rr >= InpLock3RRR)        step = STEP_TRAILING;
-      else if(rr >= InpBreakEvenRR) step = STEP_BREAKEVEN;
-      else if(rr >= InpCutRiskRR)   step = STEP_HALF_RISK;
+      // v5.27: STEP_TRAILING now keys off InpLockProfitRR (the step-profit-lock
+      // AND ATR-trail trigger) rather than InpLock3RRR. Both default to 3.0, so
+      // behaviour is unchanged out of the box, but the classification now
+      // follows the input that actually governs the locked-floor milestone.
+      // Order matters: highest milestone first.
+      if(InpLockProfitRR > 0.0 && rr >= InpLockProfitRR)      step = STEP_TRAILING;
+      else if(rr >= InpLock3RRR)                              step = STEP_TRAILING;
+      else if(rr >= InpBreakEvenRR)                           step = STEP_BREAKEVEN;
+      else if(rr >= InpCutRiskRR)                             step = STEP_HALF_RISK;
       m_orderManager.SetActiveTradeStep(step);
       m_orderManager.SetActiveTradeHighWatermark(price);
      }

@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.25 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.26 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.25"
-#property description "OTTO v5.25 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes)"
+#property version   "5.26"
+#property description "OTTO v5.26 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -51,7 +51,12 @@ enum ENUM_VETO_REASON
    VETO_FRONTRUN,           // 1:3 target hit before entry
    VETO_NEARMISS,           // 6 market days in the proximity zone without entry
    VETO_BROKEN,             // Broken without flip capability
-   VETO_FLIPPED             // Broken -> block flipped (S<->R)
+   VETO_FLIPPED,            // Broken -> block flipped (S<->R)
+   // FIX (v5.26): portfolio-consensus veto. Set when a resting pending order (or
+   // a newly forming block) opposes the global currency-vector consensus beyond
+   // InpConsensusVetoThreshold. Distinct from the geographic block vetoes above,
+   // which are per-chart; this one is portfolio-wide.
+   VETO_CORRELATION         // Opposes the 8-currency vector consensus
   };
 
 // Pine entry_style: "Midpoint" or "Front Edge"
@@ -255,11 +260,25 @@ input double   SafetyTotalDDLimit  = 5.0;     // Hard breach: close all + halt a
 // a permanent halt. Breach => close all + halt.
 input double   SafetyMaxFloatingLoss = 1.0;   // Hard breach: close all + halt if floating loss hits %
 
+input group "══════════════════════════════════════════════════"
+input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.26"
+input group "══════════════════════════════════════════════════"
+// FIX (v5.26): portfolio-wide consensus engine ported from the theoretical
+// Base/Quote + Regional Affinity model. Additive to the per-chart
+// GetCorrelationScore() ladder, which still drives the TS_Bias_* hive mind.
+input bool     InpEnableVectorEngine = true;   // Enable currency-vector consensus layer
+input double   InpConsensusVetoThreshold = 50.0; // |consensus| % to veto/cancel opposing orders
+input bool     InpUseExternalAnchors = true;   // Factor untraded DXY / XAUUSD macro anchors
+input int      InpAnchorTF           = PERIOD_M15; // Anchor candle timeframe (M15 default)
+input bool     InpCancelOpposingPendings = true; // Cancel resting pendings against consensus
+
 //+------------------------------------------------------------------+
 //| Global Constants                                                 |
 //+------------------------------------------------------------------+
 #define MAX_BLOCKS        50        // Max concurrent S/R blocks (memory safety)
 #define MAX_ATR_HISTORY   32        // ATR history buffer for the 8-bar veto scan
+#define OTTO_CURRENCY_COUNT 8       // 8-currency universe (USD..JPY)
+#define OTTO_PAIR_COUNT     28      // 28 FX crosses derived from those 8
 
 //+------------------------------------------------------------------+
 #endif  // __OTTO_DEFINES__

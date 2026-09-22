@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.25)            |
+//|                    Pine Script Master Build Port (v5.26)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.25"
+#property version   "5.26"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -170,7 +170,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.25 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.26 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -692,6 +692,21 @@ void OnTick(void)
    // ================================================================
    g_blockManager.CheckVetoesInTick(g_marketDay);
    g_orderManager.CancelOrdersForInvalidBlocks();
+
+   // ================================================================
+   // STEP 3b: v5.26 CURRENCY-VECTOR CONSENSUS REFRESH
+   // Rebuilds the 8-currency vectors from the portfolio book and
+   // re-normalizes the 28-pair consensus. Must run BEFORE order
+   // placement so the consensus veto reads fresh state, and before the
+   // opposing-pending sweep so cancellations use the same snapshot.
+   // Cheap: one pass over positions + pendings, no history reads except
+   // the two cached anchor symbols.
+   // ================================================================
+   g_correlationFilter.RefreshVectorState();
+
+   // Strict outlier cancellation: drop our own pendings that now fight
+   // the refreshed consensus.
+   g_orderManager.CancelOpposingConsensusOrders();
 
    // ================================================================
    // STEP 4: ORDER PLACEMENT â€” Pine-gated limit orders for armed blocks

@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.25"
+#property version   "5.26"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -354,6 +354,24 @@ private:
          if(EnableLogging)
             Print("[Correlation] VETO on ", m_symbol,
                   (dir == DIR_LONG ? " LONG" : " SHORT"));
+         return false;
+        }
+
+      // v5.26 — ADDITIVE portfolio-consensus layer. The ladder above is a
+      // per-chart geographic check; this one reads the whole book's currency
+      // vectors. Consensus is refreshed by the EA once per cycle, so this is
+      // a pure array read here — no per-block portfolio re-scan.
+      if(m_correlationFilter != NULL &&
+         m_correlationFilter.IsConsensusOpposed(m_symbol, dir))
+        {
+         block.isVetoed   = true;
+         block.vetoReason = VETO_CORRELATION;
+         m_blockManager.SetBlockAt(blockIndex, block);
+         if(EnableLogging)
+            Print("[Correlation] VECTOR VETO on ", m_symbol,
+                  (dir == DIR_LONG ? " LONG" : " SHORT"),
+                  " | consensus = ",
+                  DoubleToString(m_correlationFilter.GetPairConsensus(m_symbol), 1), "%");
          return false;
         }
       if(!SentimentPasses(block)) return false;
@@ -1439,6 +1457,7 @@ public:
                    else if(blocks[i].vetoReason == VETO_NO_SEPARATION) cancelReason = "Separation Veto";
                    else if(blocks[i].vetoReason == VETO_BROKEN)     cancelReason = "Block Broken";
                    else if(blocks[i].vetoReason == VETO_FLIPPED)    cancelReason = "Block Flipped";
+                   else if(blocks[i].vetoReason == VETO_CORRELATION) cancelReason = "Vector Consensus Veto";
                    else if(blocks[i].pendingOrderCancel)           cancelReason = "Manual / Direction Conflict";
                    MqlDateTime ctm; TimeToStruct(TimeCurrent(), ctm);
                    string cts = StringFormat("%04d%02d%02d-%02d%02d%02d", ctm.year, ctm.mon, ctm.day, ctm.hour, ctm.min, ctm.sec);
@@ -1461,6 +1480,64 @@ public:
            }
         }
      }
+   //+------------------------------------------------------------------+
+   //| v5.26 — CancelOpposingConsensusOrders                        |
+   //| Strict outlier sweep: cancels any of OUR resting pendings whose    |
+   //| direction fights the portfolio currency-vector consensus beyond    |
+   //| InpConsensusVetoThreshold.                                         |
+   //|                                                                    |
+   //| Only covers pendings placed by the magic this instance owns — by   |
+   //| design the local magic filter does NOT protect other charts'       |
+   //| orders, because every EA instance shares MagicNumber and thus any  |
+   //| instance may legitimately clean up any stale opposing order.       |
+   //+------------------------------------------------------------------+
+   void              CancelOpposingConsensusOrders(void)
+     {
+      if(!InpCancelOpposingPendings) return;
+      if(m_correlationFilter == NULL) return;
+
+      for(int i = OrdersTotal() - 1; i >= 0; i--)
+        {
+         ulong ticket = OrderGetTicket(i);
+         if(ticket <= 0) continue;
+         if(!OrderSelect(ticket)) continue;
+         if(OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
+
+         ENUM_ORDER_TYPE ot = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+         ENUM_TRADE_DIRECTION dir = DIR_NONE;
+         if(ot == ORDER_TYPE_BUY_LIMIT || ot == ORDER_TYPE_BUY_STOP)   dir = DIR_LONG;
+         if(ot == ORDER_TYPE_SELL_LIMIT || ot == ORDER_TYPE_SELL_STOP) dir = DIR_SHORT;
+         if(dir == DIR_NONE) continue;
+
+         string sym = OrderGetString(ORDER_SYMBOL);
+         if(!m_correlationFilter.IsConsensusOpposed(sym, dir)) continue;
+
+         if(DeleteOrder(ticket))
+           {
+            if(EnableLogging)
+               Print("[OrderManager] VECTOR CANCEL: ticket ", ticket, " ", sym,
+                     (dir == DIR_LONG ? " LONG" : " SHORT"),
+                     " | consensus = ",
+                     DoubleToString(m_correlationFilter.GetPairConsensus(sym), 1), "%");
+
+            // Release any block still holding this ticket so the array can
+            // free the struct and the duplicate shield stays consistent.
+            int bi = m_blockManager.FindBlockIndexByTicket(ticket);
+            if(bi >= 0)
+              {
+               SSniperBlock mod;
+               if(m_blockManager.GetBlockAt(bi, mod))
+                 {
+                  mod.limitOrderTicket = 0;
+                  mod.pendingOrderCancel = false;
+                  m_blockManager.SetBlockAt(bi, mod);
+                 }
+              }
+           }
+        }
+     }
+
+
 
 
    //+------------------------------------------------------------------+

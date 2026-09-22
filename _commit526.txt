@@ -1,0 +1,43 @@
+5.26: Currency vector & affinity engine
+
+Ports the theoretical Base/Quote + regional-affinity model as an ADDITIVE
+portfolio-consensus layer, leaving the v5.25 correlation ladder and the
+TS_Bias_ hive mind untouched.
+
+COttoCorrelationFilter.mqh:
+- CleanSymbol() resolves anchor roots (XAUUSD/GOLD, DXY/USDX/USIDX) BEFORE
+  generic 6-char slicing, closing a latent substring match on gold.
+- SeedAffinities() ports the reference table exactly, writing both cells so
+  the matrix is symmetric by construction. USD is deliberately left empty: it
+  is the independent global liquid counterweight baseline.
+- AddExposure() seeds Base +1*dir / Quote -1*dir from live positions and
+  resting pendings carrying our magic.
+- BuildCurrencyVectors() propagates first-order affinity for currencies NOT
+  directly set, matching the reference loop.
+- ApplyExternalAnchors() injects the untraded macro anchors additively after
+  propagation: DXY up => USD +1, DXY down => USD -1, gold up => USD -1. A
+  missing symbol or absent history is a silent no-op, never a per-tick log.
+- ResolveAnchorSymbol() discovers the broker's real symbol strings once and
+  caches them, so SymbolsTotal() is never enumerated per tick.
+- ComputeConsensus() normalizes movement = v[Base] - v[Quote] against maxAbs,
+  preserving the reference maxAbs==0 guard so a flat portfolio cannot divide
+  by zero.
+- RefreshVectorState() / GetPairConsensus() / IsConsensusOpposed() public API.
+
+OttoDefines.mqh:
+- New VETO_CORRELATION reason plus a [9] input group: InpEnableVectorEngine,
+  InpConsensusVetoThreshold=50, InpUseExternalAnchors, InpAnchorTF,
+  InpCancelOpposingPendings.
+
+COttoOrderManager.mqh:
+- Consensus veto in PlaceLimitOrder, recorded as VETO_CORRELATION on the block.
+- CancelOpposingConsensusOrders() strict outlier sweep over our own pendings,
+  releasing the block ticket on cancel.
+- Journal reason mapping for VETO_CORRELATION.
+
+otto.mq5: STEP 3b refreshes vector state before placement and runs the cancel
+sweep off the same snapshot.
+
+Gates: 0 errors / 0 warnings; _probe/test_v526_vector.py 83/83; all 7 prior
+probe suites pass; normalize_eol bareLF=0 bareCR=0; repair_mojibake clean;
+10/10 files CRLF-preserved.

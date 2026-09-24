@@ -17,7 +17,7 @@ Pins the behaviour that cannot be exercised by the MQL5 compiler gate:
  11. The clamp never exceeds 31 chars for the longest realistic identifier.
  12. The clamp preserves the -BLK<n> tail (no blind head truncation).
  13. The clamp leaves short strings untouched and handles <=31 exactly.
- 14. Version stamp 5.27 present; no 5.26 property stamp survives.
+ 14. Version stamp 5.28 present; no 5.27 property stamp survives.
 
 Pure static analysis of the shipped sources - no MT5 required.
 """
@@ -32,7 +32,7 @@ TM = os.path.join(ROOT, "COttoTradeManager.mqh")
 OM = os.path.join(ROOT, "COttoOrderManager.mqh")
 DEFS = os.path.join(ROOT, "OttoDefines.mqh")
 
-# The 10 files that must all carry the 5.27 stamp.
+# The 10 files that must all carry the 5.28 stamp.
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
              "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
@@ -319,17 +319,17 @@ check("exhaustive combo sweep never exceeds 31", worst <= 31, "max=%d" % worst)
 # 10. Version stamps
 # ----------------------------------------------------------------------
 missing = [f for f in ALL_FILES
-           if '#property version   "5.27"' not in read(os.path.join(ROOT, f))]
-check("all 10 files stamp 5.27", not missing, "missing: %s" % ", ".join(missing))
+           if '#property version   "5.28"' not in read(os.path.join(ROOT, f))]
+check("all 10 files stamp 5.28", not missing, "missing: %s" % ", ".join(missing))
 
 stale = [f for f in ALL_FILES
-         if '#property version   "5.26"' in read(os.path.join(ROOT, f))]
-check("no 5.26 property stamp survives", not stale, "stale: %s" % ", ".join(stale))
+         if '#property version   "5.27"' in read(os.path.join(ROOT, f))]
+check("no 5.27 property stamp survives", not stale, "stale: %s" % ", ".join(stale))
 
-check("OttoDefines banner names v5.27", "OTTO EA v5.27" in DEFS_T)
+check("OttoDefines banner names v5.28", "OTTO EA v5.28" in DEFS_T)
 
-check("OttoDefines description names v5.27",
-      '#property description "OTTO v5.27' in DEFS_T)
+check("OttoDefines description names v5.28",
+      '#property description "OTTO v5.28' in DEFS_T)
 
 
 

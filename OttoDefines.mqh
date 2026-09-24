@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.27 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.28 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.27"
-#property description "OTTO v5.27 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
+#property version   "5.28"
+#property description "OTTO v5.28 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -286,9 +286,20 @@ input double   SafetyTotalDDLimit  = 5.0;     // Hard breach: close all + halt a
 // routine intraday dip while equity is still below its own peak cannot trip
 // a permanent halt. Breach => close all + halt.
 input double   SafetyMaxFloatingLoss = 1.0;   // Hard breach: close all + halt if floating loss hits %
+// FIX (v5.28): GFT's daily drawdown counter resets at 5:00 PM NEW YORK, which
+// is 5:00 PM EST (UTC-5) in winter and 5:00 PM EDT (UTC-4) in summer. The
+// session boundary is derived from TimeGMT() with the US DST rule applied
+// (2nd Sunday of March -> 1st Sunday of November), so it lands on the same
+// instant on any broker feed. The previous build read the boundary off
+// iTime(PERIOD_D1,0) -- the BROKER's midnight -- which equals 17:00 New York
+// only on a GMT+2/+3 server. On a UTC or local feed the budget re-baselined
+// 5-8 hours away from the firm's actual reset.
+// The reset anchor is persisted as the OTTO_Last5pmReset_<login> GlobalVariable
+// (renamed from OTTO_LastMid_<login>); a stale stamp is re-seeded to live
+// balance on init so a restart cannot carry a finished session's budget.
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.27"
+input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.28"
 input group "══════════════════════════════════════════════════"
 // FIX (v5.26): portfolio-wide consensus engine ported from the theoretical
 // Base/Quote + Regional Affinity model. Additive to the per-chart

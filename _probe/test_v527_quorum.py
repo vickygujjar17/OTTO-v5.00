@@ -16,7 +16,7 @@ Pins the behaviour that cannot be exercised by the MQL5 compiler gate:
   9. Trade manager: filter injected, open-age gate, one-shot latch.
  10. Order manager: sweep exists, sets VETO_CORRELATION, is reachable.
  11. otto.mq5 wires the filter into Initialize and calls the sweep.
- 12. Version stamp 5.27 present.
+ 12. Version stamp 5.28 present.
 
 Pure static analysis of the shipped sources - no MT5 required.
 """
@@ -233,8 +233,8 @@ check("quorum sweep runs after the consensus sweep",
 for f in ALL_FILES:
     p = os.path.join(ROOT, f)
     txt = read(p)
-    check("version 5.27 stamped in %s" % f, '5.27' in txt)
-check("no stale 5.26 property stamp in OttoDefines", 'version   "5.26"' not in DEFS_T)
+    check("version 5.28 stamped in %s" % f, '5.28' in txt)
+check("no stale 5.27 property stamp in OttoDefines", 'version   "5.27"' not in DEFS_T)
 
 
 # ---------------------------------------------------------------- CRLF

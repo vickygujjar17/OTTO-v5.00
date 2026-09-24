@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.26)            |
+//|                    Pine Script Master Build Port (v5.28)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.27"
+#property version   "5.28"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -66,7 +66,12 @@ datetime g_lastBarTime      = 0;
 
 // --- Prop Firm Safety State ---
 double   g_initialBalance      = 0;
-double   g_dailyResetBalance   = 0;  // Resets at 00:00 Server Time (5:00 PM EST)
+// FIX (v5.28): the daily budget now re-baselines at the 5:00 PM NEW YORK
+// boundary computed from TimeGMT(), not at the broker's D1 candle open. On a
+// GMT+2/+3 feed the two coincide, but on a UTC or local feed the D1 open drifts
+// 5-8 hours off the firm's actual reset, handing back (or withholding) drawdown
+// budget mid-session.
+double   g_dailyResetBalance   = 0;  // Resets at 17:00 New York (EST/EDT aware)
 // FIX (v5.24): single equity high-water mark. Trailing total DD previously
 // trailed the peak CLOSED balance in g_highWaterMarkBalance; it now trails
 // peak EQUITY, so both the 5% trailing DD and the 1% floating rule share this
@@ -74,7 +79,12 @@ double   g_dailyResetBalance   = 0;  // Resets at 00:00 Server Time (5:00 PM EST
 // Consequence: with both rules on the same basis, the 1% rule is strictly
 // tighter and fires first; the 5% check remains as a documented backstop.
 double   g_equityHighWaterMark = 0;  // Tracks highest all-time EQUITY for Trailing Drawdown
-datetime g_lastMidnightCheck   = 0;
+// FIX (v5.28): renamed from g_lastMidnightCheck. The anchor is no longer a
+// "midnight" of any kind -- it is the exact epoch second of the most recent
+// 17:00 New York boundary, derived from the GMT clock and therefore identical
+// on every broker feed. Value is stable for a full 24h so the `!=` guard in
+// CheckDailyReset() fires exactly once per session.
+datetime g_last5pmEstReset     = 0;
 bool     g_dailyDD_Paused      = false;
 bool     g_totalDD_Halted      = false;
 datetime g_dailyDD_ResumeTime  = 0;
@@ -149,6 +159,119 @@ bool OttoGvStoreFlag(const string key, const bool value)
   }
 
 //+------------------------------------------------------------------+
+//| New York session clock (v5.28)                                    |
+//|                                                                   |
+//| GFT's daily drawdown counter resets at 5:00 PM New York, which is  |
+//| 5:00 PM EST (UTC-5) in winter and 5:00 PM EDT (UTC-4) in summer.   |
+//| The previous build inferred that boundary from iTime(PERIOD_D1,0), |
+//| i.e. the broker's own midnight -- a different wall-clock moment on |
+//| any feed that is not GMT+2/+3. The helpers below derive the true   |
+//| boundary from TimeGMT() so the reset lands on the same instant     |
+//| regardless of broker server offset.                                |
+//|                                                                   |
+//| US DST rule (since 2007): starts 02:00 LOCAL on the 2nd Sunday of  |
+//| March, ends 02:00 LOCAL on the 1st Sunday of November. Expressed   |
+//| in UTC those transitions are 07:00 and 06:00 respectively. A 17:00 |
+//| boundary is never adjacent to a transition, so the offset in force |
+//| at the boundary instant is always the offset that applies to it.   |
+//+------------------------------------------------------------------+
+
+//| Day-of-month of the nth Sunday in the given month of the year.   |
+//| Returns 0 if the month cannot contain that many Sundays.         |
+int OttoNthSunday(int year, int month, int nth)
+  {
+   int seen = 0;
+   for(int d = 1; d <= 31; d++)
+     {
+      MqlDateTime dt;
+      dt.year = year;
+      dt.mon  = month;
+      dt.day  = d;
+      dt.hour = 0;
+      dt.min  = 0;
+      dt.sec  = 0;
+      MqlDateTime out;
+      TimeToStruct(StructToTime(dt), out);
+      // StructToTime normalises an out-of-range day into the next month;
+      // that is the signal to stop scanning.
+      if(out.mon != month)
+         break;
+      if(out.day_of_week == 0)
+        {
+         seen++;
+         if(seen == nth)
+            return d;
+        }
+     }
+   return 0;
+  }
+
+//| UTC instant of a Y/M/D HH:MM:00 stamp (used for DST transitions). |
+datetime OttoUtcStamp(int year, int month, int day, int hour)
+  {
+   MqlDateTime dt;
+   dt.year = year;
+   dt.mon  = month;
+   dt.day  = day;
+   dt.hour = hour;
+   dt.min  = 0;
+   dt.sec  = 0;
+   return StructToTime(dt);
+  }
+
+//| True when the UTC instant falls inside US daylight-saving time.   |
+bool OttoIsNewYorkDst(datetime gmt)
+  {
+   MqlDateTime dt;
+   TimeToStruct(gmt, dt);
+   int year = dt.year;
+
+   int startDay = OttoNthSunday(year, 3, 2);    // 2nd Sunday of March
+   int endDay   = OttoNthSunday(year, 11, 1);   // 1st Sunday of November
+   if(startDay == 0 || endDay == 0)
+      return false;                             // degenerate: assume EST
+
+   // 02:00 EST == 07:00 UTC; 02:00 EDT == 06:00 UTC.
+   datetime dstStart = OttoUtcStamp(year, 3,  startDay, 7);
+   datetime dstEnd   = OttoUtcStamp(year, 11, endDay,   6);
+   return (gmt >= dstStart && gmt < dstEnd);
+  }
+
+//| Current wall-clock time on the New York floor (EST/EDT aware).    |
+datetime OttoNewYorkTime(datetime gmt)
+  {
+   int offsetHours = OttoIsNewYorkDst(gmt) ? 4 : 5;
+   return gmt - (datetime)(offsetHours * 3600);
+  }
+
+//| Most recent 17:00:00 New York boundary, returned as a UTC epoch.  |
+//|                                                                   |
+//| On a weekend or before 17:00 NY this resolves to the PREVIOUS      |
+//| weekday's boundary, exactly like a firm-side session clock: the     |
+//| value changes once per calendar day at 17:00 and is constant in     |
+//| between, so the `!=` guard in CheckDailyReset() fires once per      |
+//| session and never mid-session.                                     |
+datetime OttoLast5pmNewYork(datetime gmt)
+  {
+   datetime ny = OttoNewYorkTime(gmt);
+
+   MqlDateTime dt;
+   TimeToStruct(ny, dt);
+   dt.hour = 17;
+   dt.min  = 0;
+   dt.sec  = 0;
+   datetime boundaryNy = StructToTime(dt);   // 17:00 NY on this NY date
+   if(boundaryNy > ny)
+      boundaryNy -= 86400;                   // today's boundary is still ahead
+
+   // Map the NY wall-clock boundary back to UTC using the offset in force
+   // AT the boundary. 17:00 sits far from any transition, so the offset read
+   // at the first candidate is already the correct one.
+   datetime gmtEst = boundaryNy + 5 * 3600;
+   return OttoIsNewYorkDst(gmtEst) ? (boundaryNy + 4 * 3600) : gmtEst;
+  }
+
+//+------------------------------------------------------------------+
 //| Persist every prop-firm safety baseline (v5.25).                   |
 //| Called whenever a baseline moves, so a restart always resumes from |
 //| the true rather than the current account state.                    |
@@ -157,7 +280,12 @@ void PersistSafetyState(void)
   {
    OttoGvStore("DailyReset", g_dailyResetBalance);
    OttoGvStore("HighWater",  g_equityHighWaterMark);
-   OttoGvStore("LastMid",    (double)g_lastMidnightCheck);
+   // FIX (v5.28): key renamed LastMid -> Last5pmReset to match what the value
+   // actually holds. The old key name is abandoned rather than migrated: an
+   // existing LastMid stamp would be a broker-midnight value that is not a
+   // valid 17:00-NY boundary, so treating it as absent lets OnInit() re-anchor
+   // once. On the next tick CheckDailyReset() re-persists under the new key.
+   OttoGvStore("Last5pmReset", (double)g_last5pmEstReset);
    OttoGvStoreFlag("Paused", g_dailyDD_Paused);
    OttoGvStoreFlag("Halted", g_totalDD_Halted);
   }
@@ -170,7 +298,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.27 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.28 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -294,15 +422,18 @@ int OnInit(void)
    g_initialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
    double liveEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   datetime todayBar = iTime(_Symbol, PERIOD_D1, 0);
 
    // --- Daily reset anchor (3% daily DD basis) ---
-   // Re-seeded when absent OR when the stored midnight stamp is older than the
-   // currently-loaded D1 bar: a prop firm can RESET a challenge account on the
-   // same login, and carrying the old anchor across that reset would apply a
-   // stale (possibly already-breached) budget to a freshly-funded account.
-   g_lastMidnightCheck = (datetime)OttoGvLoadDouble("LastMid", (double)todayBar);
-   bool staleAnchor    = (todayBar != 0 && g_lastMidnightCheck < todayBar);
+   // FIX (v5.28): the anchor is the most recent 17:00 New York boundary, taken
+   // from TimeGMT() rather than from the broker's D1 candle open. The stored
+   // stamp is re-seeded when absent OR when it precedes the boundary that is in
+   // force right now -- i.e. the session rolled over while the EA was down, so
+   // the persisted budget belongs to a session that has already ended. The same
+   // test covers a prop firm resetting the challenge account on the same login:
+   // a reset always lands on a later calendar day, so the stamp is stale too.
+   datetime nyBoundaryNow = OttoLast5pmNewYork(TimeGMT());
+   g_last5pmEstReset = (datetime)OttoGvLoadDouble("Last5pmReset", (double)nyBoundaryNow);
+   bool staleAnchor    = (g_last5pmEstReset < nyBoundaryNow);
    double storedDaily  = OttoGvLoadDouble("DailyReset", liveEquity);
    if(staleAnchor)
       g_dailyResetBalance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -326,8 +457,8 @@ int OnInit(void)
    // CheckDailyReset) and is recomputed here from the persisted anchor.
    g_totalDD_Halted = OttoGvLoadFlag("Halted", false);
    g_dailyDD_Paused = OttoGvLoadFlag("Paused", false) && !staleAnchor;
-   g_dailyDD_ResumeTime = (g_dailyDD_Paused && g_lastMidnightCheck > 0)
-                          ? g_lastMidnightCheck + 86400 : 0;
+   g_dailyDD_ResumeTime = (g_dailyDD_Paused && g_last5pmEstReset > 0)
+                          ? g_last5pmEstReset + 86400 : 0;
 
    // Persist the reconciled baselines so the store matches in-memory truth.
    PersistSafetyState();
@@ -339,11 +470,15 @@ int OnInit(void)
          " (stored ", DoubleToString(storedHwm, 2), ")");
    Print("[Safety] Restored latches: Paused=", g_dailyDD_Paused ? "true" : "false",
          " Halted=", g_totalDD_Halted ? "true" : "false",
-         " | LastMidnight: ", TimeToString(g_lastMidnightCheck, TIME_DATE|TIME_MINUTES));
+         " | Last5pmReset: ", TimeToString(g_last5pmEstReset, TIME_DATE|TIME_MINUTES));
    Print("[Safety] Init Balance: ", DoubleToString(g_initialBalance, 2),
          " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD(trailing): ", SafetyTotalDDLimit,
          "% | Floating: ", SafetyMaxFloatingLoss, "%");
-   Print("[Safety] Daily reset anchor: ", TimeToString(g_lastMidnightCheck, TIME_DATE|TIME_MINUTES));
+   int    serverOffset = (int)(TimeTradeServer() - TimeGMT());
+   Print("[Safety] Daily reset anchor (17:00 NY): ",
+         TimeToString(g_last5pmEstReset, TIME_DATE|TIME_MINUTES), " GMT",
+         " (server ", TimeToString((datetime)(g_last5pmEstReset + serverOffset),
+                                   TIME_DATE|TIME_MINUTES), ")");
 
    // --- Market-day counter init (mirrors ta.change(time("D"))) ---
    g_lastDailyBarTime = iTime(_Symbol, PERIOD_D1, 0);
@@ -447,31 +582,40 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
-//| Checks daily balance reset at midnight server time (5PM EST close) |
+//| Checks the daily reset at 5:00 PM NEW YORK (v5.28)                |
 //+------------------------------------------------------------------+
 void CheckDailyReset(void)
   {
-   // iTime with PERIOD_D1 natively returns the 00:00 server timestamp (5:00 PM EST)
-   // FIX (v5.23): the previous MqlDateTime/TimeCurrent/StructToTime form kept the
-   // live HH:MM:SS, so this timestamp changed every tick and the reset below
-   // re-baselined g_dailyResetBalance continuously -- silently disabling the 3%
-   // daily drawdown limit. iTime truncates to the 00:00 daily candle open.
-   datetime serverMidnight_5pmEST = iTime(_Symbol, PERIOD_D1, 0);
+   // FIX (v5.28): the boundary is derived from TimeGMT(), not from
+   // iTime(PERIOD_D1,0). The D1 open is the BROKER's midnight, which coincides
+   // with 5:00 PM New York only on a GMT+2/+3 feed (the previous comment here
+   // asserted that identity unconditionally, and it is false on a UTC or local
+   // feed). Because the anchor is now offset-independent it is identical on
+   // every chart, and its value is constant for a full 24h, so the `!=` guard
+   // below fires exactly once per session -- the tick-by-tick re-baselining that
+   // v5.23 fixed cannot return through this path.
+   //
+   // TimeGMT() is the terminal's own clock corrected for NTP; it does not need
+   // broker history, so unlike the old iTime() form this is valid from the very
+   // first tick and the previous "iTime returned 0 while D1 loads" guard is gone.
+   datetime nyBoundary = OttoLast5pmNewYork(TimeGMT());
 
-   // Ensure the timestamp is valid before processing: iTime returns 0 when the
-   // D1 series is not yet available (fresh chart / history still downloading),
-   // and a 0 would otherwise trip a spurious reset on the first tick.
-   if(serverMidnight_5pmEST != 0 && serverMidnight_5pmEST != g_lastMidnightCheck)
+   // A boundary of 0 could only come from a catastrophic clock fault; refusing
+   // it keeps a bad read from re-baselining the budget on every tick.
+   if(nyBoundary == 0)
+      return;
+
+   if(nyBoundary != g_last5pmEstReset)
      {
       g_dailyResetBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-      g_lastMidnightCheck = serverMidnight_5pmEST;
+      g_last5pmEstReset = nyBoundary;
       g_dailyDD_ResumeTime = 0;   // pause window ended with the session
 
       if(g_dailyDD_Paused)
         {
          g_dailyDD_Paused = false;
          if(EnableLogging)
-            Print("[Safety] New day (5:00 PM EST) — daily DD pause LIFTED");
+            Print("[Safety] New day (17:00 New York) — daily DD pause LIFTED");
         }
 
       // FIX (v5.25): persist the new session baselines. Without this the
@@ -480,7 +624,7 @@ void CheckDailyReset(void)
       // NOTE: g_totalDD_Halted is deliberately NOT cleared here. The 5% trailing
       // breach is permanent for the life of the account; only the daily pause is
       // a per-session state. Clearing the halt on rollover would let a breached
-      // account resume trading at the next midnight.
+      // account resume trading at the next boundary.
       PersistSafetyState();
      }
   }
@@ -631,7 +775,7 @@ void OnTick(void)
       if(dailyDD >= SafetyDailyDDLimit)
         {
          g_dailyDD_Paused = true;
-         g_dailyDD_ResumeTime = g_lastMidnightCheck + 86400;
+         g_dailyDD_ResumeTime = g_last5pmEstReset + 86400;
          OttoGvStoreFlag("Paused", true);   // FIX (v5.25): survives a restart
          g_orderManager.CancelAllPendingOrders();
          if(EnableLogging)

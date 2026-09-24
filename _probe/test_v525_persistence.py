@@ -14,6 +14,12 @@ v5.25 persists those baselines in MT5 GlobalVariables instead.
 Each function below mirrors the corresponding branch of otto.mq5 exactly, so
 this file is a behavioural spec for the MQL5 code rather than a re-implementation
 of it. If the .mq5 logic drifts, these checks fail.
+
+FIX (v5.29): the persisted g_totalDD_Halted latch is now armed ONLY by the 5%
+trailing total-DD rule. The 1% floating rule (re-measured balance-vs-equity in
+v5.29) closes the basket and cancels pendings WITHOUT latching anything, so it
+can no longer persist a halt. The permanence checks below therefore describe the
+trailing rule, which is the sole account-ending limit.
 """
 
 LOGIN = 12345678
@@ -86,10 +92,19 @@ def tick_ratchet(store, equity, hwm):
 
 
 def dd(hwm, eq):
-    """Shared trailing measure (v5.24 basis, both rules)."""
+    """5% trailing measure (v5.24 basis). The 1% floating rule no longer shares
+    this basis as of v5.29 -- see floating_loss() below."""
     if hwm <= 0:
         return 0.0
     return 100.0 * (hwm - eq) / hwm
+
+
+def floating_loss(balance, equity):
+    """v5.29 1% floating measure: unrealised loss on open positions vs the
+    CLOSED balance. Exactly 0 whenever equity >= balance (flat or in profit)."""
+    if balance <= 0 or equity >= balance:
+        return 0.0
+    return 100.0 * (balance - equity) / balance
 
 
 def check(label, got, want):
@@ -148,8 +163,22 @@ def main():
     rebased_dd = dd(102500, 102500)
     ok &= checkf("true trailing DD from 104000 -> 1.4423%", true_dd, 1.4423076923076923)
     ok &= checkf("v5.24 re-based form reads 0.0000% (blind)", rebased_dd, 0.0)
-    ok &= check("1% floating rule fires on the TRUE basis", true_dd >= 1.0, True)
+    ok &= check("5% trailing rule sees the true 1.4423% give-back", true_dd >= 1.0, True)
     ok &= check("  ...but was silent under the re-based basis", rebased_dd >= 1.0, False)
+
+    # FIX (v5.29): the 1% FLOATING rule is now balance-vs-equity, so it stays
+    # silent here -- equity 102500 is ABOVE the 100000 closed balance, i.e. the
+    # open book is in profit and there is no floating loss to cut.
+    ok &= checkf("floating (balance basis) 100000/102500 -> 0.0000%",
+                 floating_loss(100000, 102500), 0.0)
+    ok &= check("  ...so the floating branch does NOT fire on this restart",
+                floating_loss(100000, 102500) >= 1.0, False)
+    # And it is silent precisely BECAUSE equity is above balance: force equity
+    # below balance and it does fire, on its own basis.
+    ok &= checkf("equity 98500 below balance 100000 -> 1.5000%",
+                 floating_loss(100000, 98500), 1.5)
+    ok &= check("  ...which DOES breach the 1% floating rule",
+                floating_loss(100000, 98500) >= 1.0, True)
 
     # ---- Daily budget must survive a restart ----------------------------
     print("\n-- Daily 3% budget survives a mid-day restart --")
@@ -174,10 +203,12 @@ def main():
     ok &= check("  ...with a resume time derived from the anchor",
                 s2["resume"], DAY1 + 86400)
 
-    # A total-DD halt must NEVER be cleared by a restart.
+    # A total-DD halt must NEVER be cleared by a restart. FIX (v5.29): this
+    # latch is armed ONLY by the 5% trailing rule, so the permanence below is
+    # intentionally scoped to it. The 1% floating rule latches nothing.
     persist(st, 100000, 105000, DAY1, paused=True, halted=True)
     s3 = on_init(st, balance=100000, equity=98000, ny_boundary=DAY1)
-    ok &= check("PERMANENT halt restored", s3["halted"], True)
+    ok &= check("PERMANENT 5% trailing halt restored", s3["halted"], True)
     ok &= check("halted state is not reset to false on init", s3["halted"] != False, True)
 
     # ---- Rollover: pause clears, halt persists --------------------------

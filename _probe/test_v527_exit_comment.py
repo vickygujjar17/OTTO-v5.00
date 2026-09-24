@@ -319,17 +319,18 @@ check("exhaustive combo sweep never exceeds 31", worst <= 31, "max=%d" % worst)
 # 10. Version stamps
 # ----------------------------------------------------------------------
 missing = [f for f in ALL_FILES
-           if '#property version   "5.28"' not in read(os.path.join(ROOT, f))]
-check("all 10 files stamp 5.28", not missing, "missing: %s" % ", ".join(missing))
+           if '#property version   "5.29"' not in read(os.path.join(ROOT, f))]
+check("all 10 files stamp 5.29", not missing, "missing: %s" % ", ".join(missing))
 
 stale = [f for f in ALL_FILES
-         if '#property version   "5.27"' in read(os.path.join(ROOT, f))]
-check("no 5.27 property stamp survives", not stale, "stale: %s" % ", ".join(stale))
+         if '#property version   "5.27"' in read(os.path.join(ROOT, f))
+         or '#property version   "5.28"' in read(os.path.join(ROOT, f))]
+check("no 5.27/5.28 property stamp survives", not stale, "stale: %s" % ", ".join(stale))
 
-check("OttoDefines banner names v5.28", "OTTO EA v5.28" in DEFS_T)
+check("OttoDefines banner names v5.29", "OTTO EA v5.29" in DEFS_T)
 
-check("OttoDefines description names v5.28",
-      '#property description "OTTO v5.28' in DEFS_T)
+check("OttoDefines description names v5.29",
+      '#property description "OTTO v5.29' in DEFS_T)
 
 
 

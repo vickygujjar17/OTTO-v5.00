@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.28)            |
+//|                    Pine Script Master Build Port (v5.29)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.28"
+#property version   "5.29"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -72,12 +72,14 @@ double   g_initialBalance      = 0;
 // 5-8 hours off the firm's actual reset, handing back (or withholding) drawdown
 // budget mid-session.
 double   g_dailyResetBalance   = 0;  // Resets at 17:00 New York (EST/EDT aware)
-// FIX (v5.24): single equity high-water mark. Trailing total DD previously
-// trailed the peak CLOSED balance in g_highWaterMarkBalance; it now trails
-// peak EQUITY, so both the 5% trailing DD and the 1% floating rule share this
-// one basis. g_highWaterMarkBalance was removed rather than left stale.
-// Consequence: with both rules on the same basis, the 1% rule is strictly
-// tighter and fires first; the 5% check remains as a documented backstop.
+// FIX (v5.29): this HWM is now the basis of the 5% trailing total-DD rule ALONE.
+// (v5.24 history: it replaced the peak CLOSED balance held in
+// g_highWaterMarkBalance, which was removed rather than left stale.) The 1%
+// floating rule was un-merged from it in v5.29: floating loss is the unrealised
+// loss on OPEN positions, measured balance-vs-equity. Sharing this HWM made the
+// two rules evaluate the SAME quantity, so the 1% threshold sat permanently
+// tighter, a routine 1% dip latched a permanent halt, and the 5% check below
+// was unreachable dead code.
 double   g_equityHighWaterMark = 0;  // Tracks highest all-time EQUITY for Trailing Drawdown
 // FIX (v5.28): renamed from g_lastMidnightCheck. The anchor is no longer a
 // "midnight" of any kind -- it is the exact epoch second of the most recent
@@ -298,7 +300,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.28 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.29 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -414,7 +416,7 @@ int OnInit(void)
    // re-based the trailing limits downward -- "drawdown amnesia".
    //
    // The live trailing basis is g_equityHighWaterMark (single equity HWM, v5.24,
-   // shared by the 5% trailing DD and the 1% floating rule). The directive that
+   // shared by the 5% trailing DD basis; the 1% floating rule no longer shares it, v5.29). The directive that
    // requested this patch referred to a global named `g_highWaterMark`, which
    // does not exist in this build; persisting a separate new global under that
    // name would compile while leaving the REAL basis unpersisted, so the correct
@@ -455,6 +457,9 @@ int OnInit(void)
    // restart, otherwise a VPS bounce would silently resume trading past a
    // hard limit. g_dailyDD_Paused clears at the session rollover (see
    // CheckDailyReset) and is recomputed here from the persisted anchor.
+   // FIX (v5.29): this latch is now armed ONLY by the 5% trailing total-DD
+   // check. The 1% floating-loss rule no longer sets it, so a floating dip cuts
+   // the basket and trading continues instead of halting the account for good.
    g_totalDD_Halted = OttoGvLoadFlag("Halted", false);
    g_dailyDD_Paused = OttoGvLoadFlag("Paused", false) && !staleAnchor;
    g_dailyDD_ResumeTime = (g_dailyDD_Paused && g_last5pmEstReset > 0)
@@ -473,7 +478,7 @@ int OnInit(void)
          " | Last5pmReset: ", TimeToString(g_last5pmEstReset, TIME_DATE|TIME_MINUTES));
    Print("[Safety] Init Balance: ", DoubleToString(g_initialBalance, 2),
          " | DailyDD: ", SafetyDailyDDLimit, "% | TotalDD(trailing): ", SafetyTotalDDLimit,
-         "% | Floating: ", SafetyMaxFloatingLoss, "%");
+         "% | Floating: ", SafetyMaxFloatingLoss, "% of balance");
    int    serverOffset = (int)(TimeTradeServer() - TimeGMT());
    Print("[Safety] Daily reset anchor (17:00 NY): ",
          TimeToString(g_last5pmEstReset, TIME_DATE|TIME_MINUTES), " GMT",
@@ -721,12 +726,10 @@ void OnTick(void)
    // ================================================================
    if(!g_dailyDD_Paused && !g_totalDD_Halted)
      {
-      double equity         = AccountInfoDouble(ACCOUNT_EQUITY);
-
       // FIX (v5.24): single equity high-water mark. The trailing total-DD limit
       // previously trailed the peak CLOSED balance; it now trails peak EQUITY,
-      // matching GFT's all-time-equity trailing drawdown and sharing one basis
-      // with the 1% floating rule. Only ratchets UP, never down.
+      // matching GFT's all-time-equity trailing drawdown. This is the basis of
+      // the 5% trailing rule ALONE (v5.29); only ratchets UP, never down.
       // FIX (v5.25): each new peak is persisted immediately, so a restart while
       // the account is down from its high resumes from the TRUE peak instead of
       // re-basing the trailing floor to the depressed live equity.
@@ -738,37 +741,50 @@ void OnTick(void)
 
       double dailyDD = (g_dailyResetBalance > 0) ? 100.0 * (g_dailyResetBalance - equity) / g_dailyResetBalance : 0;
       double totalDD = (g_equityHighWaterMark > 0) ? 100.0 * (g_equityHighWaterMark - equity) / g_equityHighWaterMark : 0;
-      // FIX (v5.22): trailing floating-loss measure. A plain balance-vs-equity
-      // ratio fires on any routine dip while equity sits below its own peak,
-      // permanently halting the EA on a normal tick. Measuring the retracement
-      // from PEAK EQUITY instead means the rule only trips on a genuine 1%
-      // give-back from the equity high-water mark.
-      // NOTE (v5.24): totalDD and floatingLoss now evaluate the same quantity.
-      // The 1% threshold is strictly tighter, so this branch fires first and the
-      // 5% trailing check below acts as a backstop if the 1% input is raised.
-      double floatingLoss = (g_equityHighWaterMark > 0)
-                            ? 100.0 * (g_equityHighWaterMark - equity) / g_equityHighWaterMark
-                            : 0;
+      // FIX (v5.29): "floating loss" is the UNREALISED loss on currently open
+      // positions, so it is measured against the CLOSED balance:
+      //     floating = (balance - equity) / balance
+      // The previous build measured a TRAILING retracement from
+      // g_equityHighWaterMark -- exactly the quantity totalDD computes above.
+      // Three consequences of that basis are all removed here:
+      //   * the two rules were the same quantity, so the 1% threshold sat
+      //     permanently tighter and the 5% check was unreachable;
+      //   * a 1% dip from the equity peak fired with NO position open, where
+      //     there is by definition no floating loss at all;
+      //   * the branch latched g_totalDD_Halted (persisted, restored on every
+      //     init), so an ordinary dip permanently bricked the account.
+      // The corrected ratio cannot reproduce the false positive: when the book
+      // is flat, equity == balance and it reads exactly 0.
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+      double floatingLoss = (balance > 0 && equity < balance)
+                            ? 100.0 * (balance - equity) / balance
+                            : 0.0;
 
-      // 1% Max Floating Loss Rule (highest priority: protects open risk)
+      // 1% Max Floating Loss Rule -- INTERNAL trade-management rule (v5.29).
+      // On breach: cancel resting orders, close the whole basket to protect
+      // capital, then RETURN FOR THIS TICK ONLY. Nothing is latched and no
+      // cooldown is imposed, so the next tick resumes scanning for setups.
+      // FIX (v5.29): deliberately does NOT arm g_totalDD_Halted. That latch is
+      // persisted and restored on every init, so arming it here (as the previous
+      // build did) turned an ordinary floating dip into a permanent halt. The 5%
+      // trailing check below is now the ONLY permanent halt -- which is correct,
+      // because that is GFT's actual account-ending hard limit.
       if(floatingLoss >= SafetyMaxFloatingLoss)
         {
-         g_totalDD_Halted = true;
-         OttoGvStoreFlag("Halted", true);   // FIX (v5.25): survives a restart
          g_orderManager.CancelAllPendingOrders();
          // Close the WHOLE basket: hedging-mode pyramid tranches are separate
-         // positions and must not survive the halt.
+         // positions and must not survive the cut.
          if(g_orderManager.HasActiveTrade() || g_orderManager.CountOpenPositions() > 0)
-            g_orderManager.CloseEntireBasket("1% Max Floating Loss Breach");
+            g_orderManager.CloseEntireBasket("1% Max Floating Loss Cut");
 
          Print("==============================================================");
-         Print("  FATAL: 1% MAX FLOATING LOSS LIMIT REACHED — EA HALTED");
-         Print("  Peak Equity: ", DoubleToString(g_equityHighWaterMark, 2),
+         Print("  FLOATING LOSS CUT: ", DoubleToString(floatingLoss, 2), "% >= ",
+               DoubleToString(SafetyMaxFloatingLoss, 2),
+               "% -- basket closed, trading continues");
+         Print("  Balance: ", DoubleToString(balance, 2),
                " | Equity: ", DoubleToString(equity, 2));
-         Print("  Floating Loss: ", DoubleToString(floatingLoss, 2), "% >= ",
-               DoubleToString(SafetyMaxFloatingLoss, 2), "%");
          Print("==============================================================");
-         return;
+         return;   // this tick only; no latch, no cooldown
         }
 
       // 3% Max Daily Drawdown (soft breach: pause new orders only)

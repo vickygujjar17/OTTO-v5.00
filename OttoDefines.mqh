@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.28 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.29 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.28"
-#property description "OTTO v5.28 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
+#property version   "5.29"
+#property description "OTTO v5.29 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -281,10 +281,16 @@ input group "══════════════════════�
 input double   SafetyMaxRiskPct    = 1.5;     // Hard abort if risk > this % of account
 input double   SafetyDailyDDLimit  = 3.0;     // Soft breach: pause new orders at this %
 input double   SafetyTotalDDLimit  = 5.0;     // Hard breach: close all + halt at this % (Trailing)
-// FIX (v5.22): GFT 1% max FLOATING loss. Measured as a TRAILING retracement
-// from the peak-equity high-water mark (not raw balance-vs-equity), so a
-// routine intraday dip while equity is still below its own peak cannot trip
-// a permanent halt. Breach => close all + halt.
+// FIX (v5.29): GFT 1% max FLOATING loss. Measured as the UNREALISED loss on
+// currently open positions against the CLOSED balance -- (balance - equity) /
+// balance -- and exactly 0 whenever the book is flat, because equity == balance
+// then. The v5.22 build instead measured a TRAILING retracement from the
+// peak-equity high-water mark, which is the quantity the 5% trailing rule
+// already computes: the 1% threshold therefore sat permanently tighter. Two
+// faults followed -- a 1% dip from the equity peak fired with NO position open,
+// and the branch latched a persisted, init-restored halt that bricked the
+// account. Breach now closes the basket and cancels pendings, then trading
+// resumes on the next tick; only the 5% trailing total-DD rule halts for good.
 input double   SafetyMaxFloatingLoss = 1.0;   // Hard breach: close all + halt if floating loss hits %
 // FIX (v5.28): GFT's daily drawdown counter resets at 5:00 PM NEW YORK, which
 // is 5:00 PM EST (UTC-5) in winter and 5:00 PM EDT (UTC-4) in summer. The
@@ -299,7 +305,7 @@ input double   SafetyMaxFloatingLoss = 1.0;   // Hard breach: close all + halt i
 // balance on init so a restart cannot carry a finished session's budget.
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.28"
+input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.29"
 input group "══════════════════════════════════════════════════"
 // FIX (v5.26): portfolio-wide consensus engine ported from the theoretical
 // Base/Quote + Regional Affinity model. Additive to the per-chart

@@ -1,21 +1,24 @@
 """
-Logic verification for the v5.22 / v5.24 prop-firm safety rules.
+Logic verification for the v5.22 / v5.24 / v5.29 prop-firm safety rules.
 
 Covers the change a compile CANNOT validate: the GFT drawdown arithmetic.
-  * 3% daily DD measured from the 5PM-EST (broker midnight) reset balance
+  * 3% daily DD measured from the 5PM NEW YORK reset balance
   * 5% TRAILING total DD measured from the peak EQUITY high-water mark
     (v5.22 used peak CLOSED balance; v5.24 switched it to peak equity)
-  * 1% floating loss as a TRAILING retracement from that same peak EQUITY
+  * 1% floating loss measured balance-vs-equity -- the UNREALISED loss on
+    open positions (v5.29; v5.22-v5.28 used a TRAILING retracement)
 
-The floating rule is the important one. A raw (balance - equity)/balance
-ratio trips on any routine dip while equity is below its own peak, which
-would permanently halt the EA on an ordinary tick. The trailing measure
-must NOT fire in that situation -- that difference is pinned below.
-
-v5.24 NOTE: because total_dd and floating_trailing now share one equity
-basis, they evaluate the SAME quantity. The 1% threshold is strictly
-tighter, so it fires first and the 5% trailing check is a backstop. That
-interaction is pinned in `-- Rule interaction` at the end.
+FIX (v5.29): the floating rule and the 5% trailing rule were merged onto the
+SAME equity basis by v5.24, so they evaluated one identical quantity. Three
+faults followed, all pinned as FIXED below:
+  * the 1% threshold sat permanently tighter than the 5% one, making the 5%
+    check unreachable dead code;
+  * a 1% retracement from the equity peak fired with NO position open, where
+    there is by definition no floating loss at all;
+  * the branch latched a persisted, init-restored halt, bricking the account.
+The balance-vs-equity measure cannot reproduce the false positive: when the
+book is flat, equity == balance and it reads exactly 0. It also restores the
+5% trailing check as genuinely reachable.
 """
 
 
@@ -40,14 +43,28 @@ def total_dd_balance_basis(hwm_balance, equity):
 
 
 def floating_trailing(equity_hwm, equity):
-    """v5.22 measure: retracement from peak EQUITY."""
+    """The v5.22-v5.28 measure (now retired): retracement from peak EQUITY.
+
+    Retained to document what changed and to prove it was the same quantity as
+    total_dd -- the defect v5.29 removed.
+    """
     if equity_hwm <= 0:
         return 0.0
     return 100.0 * (equity_hwm - equity) / equity_hwm
 
 
+def floating_loss(balance, equity):
+    """v5.29 measure: unrealised loss on OPEN positions vs the CLOSED balance.
+
+    Exactly 0 whenever equity >= balance, which is the flat-book case.
+    """
+    if balance <= 0 or equity >= balance:
+        return 0.0
+    return 100.0 * (balance - equity) / balance
+
+
 def floating_raw(balance, equity):
-    """The rejected measure, kept to demonstrate the false positive."""
+    """The pre-v5.22 measure (no zero-floor on profit), kept for contrast."""
     if balance <= 0:
         return 0.0
     return 100.0 * (balance - equity) / balance
@@ -131,116 +148,91 @@ def main():
     ok &= check("...and balance basis misses the same book",
                 total_dd_balance_basis(110000, 105000) >= SAFETY_TOTAL, False)
 
-    # ---- 1% Trailing Floating Loss (the contested rule) -------------------
-    print("\n-- 1% Floating Loss: TRAILING from peak equity --")
-    # Equity peaked at 100000 then gives back 1% -> 99000.
-    ok &= checkf("equity 99000 from peak 100000 -> 1.0000%",
-                 floating_trailing(100000, 99000), 1.0)
-    ok &= check("1.00% retracement from peak breaches",
-                floating_trailing(100000, 99000) >= SAFETY_FLOAT, True)
-    ok &= check("0.90% retracement does NOT breach",
-                floating_trailing(100000, 99100) >= SAFETY_FLOAT, False)
+    # ---- 1% Floating Loss: unrealised loss on OPEN positions (v5.29) -----
+    print("\n-- 1% Floating Loss: balance-vs-equity on open positions --")
+    # A flat book cannot show a floating loss: equity == balance -> exactly 0.
+    ok &= checkf("flat book at 100000 -> 0.0000%", floating_loss(100000, 100000), 0.0)
+    ok &= check("flat book cannot breach",
+                floating_loss(100000, 100000) >= SAFETY_FLOAT, False)
+    # In profit (equity above balance) still reads 0, never negative.
+    ok &= checkf("in profit 100000/101500 -> 0.0000% (floored)",
+                 floating_loss(100000, 101500), 0.0)
+    # An open position carrying 1% of balance breaches.
+    ok &= checkf("open loss 100000/99000 -> 1.0000%", floating_loss(100000, 99000), 1.0)
+    ok &= check("1.00% on open positions breaches",
+                floating_loss(100000, 99000) >= SAFETY_FLOAT, True)
+    ok &= check("0.99% does NOT breach",
+                floating_loss(100000, 99001) >= SAFETY_FLOAT, False)
+    ok &= checkf("0.10% reads 0.1000%", floating_loss(100000, 99900), 0.1)
+    ok &= check("zero balance guard -> 0.0", floating_loss(0, 50000), 0.0)
+    ok &= check("  ...cannot breach on uninitialised state",
+                floating_loss(0, 50000) >= SAFETY_FLOAT, False)
 
-    # THE false positive: the raw ratio uses BALANCE as its basis. When balance
-    # is still showing the OPEN loss (or has moved), the basis differs from the
-    # equity peak and the two measures disagree. Below, balance 110000 with
-    # equity 108900: raw reads 1.00%... but raw and trailing diverge when the
-    # account is DOWN from its peak while balance lags the peak.
-    # Concretely: the peak equity was 110000 on a CLOSED basis (balance 110000),
-    # then a position opens and equity falls to 109450.
-    #   raw basis (balance) 110000 -> 0.50%
-    #   trailing basis (peak equity) 110000 -> 0.50%   <- agree
-    ok &= checkf("balance 110000/equity 109450 -> 0.5000%",
-                 floating_raw(110000, 109450), 0.5)
-    ok &= checkf("peak 110000/equity 109450 -> 0.5000%",
-                 floating_trailing(110000, 109450), 0.5)
-
-    # DIVERGENCE: after drawing down and partially recovering, the equity peak
-    # is 110000 but the realised balance has dropped to 108900 while a fresh
-    # position sits at 109450.
-    #   raw basis (low balance 108900) vs equity 109450 -> -0.51% (no signal)
-    #   trailing basis (peak 110000)    vs equity 109450 ->  0.50% (true risk)
-    # The raw measure understates real give-back once balance has fallen.
-    checkf("low-balance raw basis 108900/equity 109450 -> -0.5051%",
-           floating_raw(108900, 109450), -0.5050505050505051)
-    ok &= check("raw basis understates (negative, silent)",
-                floating_raw(108900, 109450) >= SAFETY_FLOAT, False)
-    ok &= checkf("trailing basis still reports 0.5000%",
-                 floating_trailing(110000, 109450), 0.5)
-
-    # A genuine 1% give-back from the peak must breach on the trailing measure.
-    ok &= checkf("peak 110000/equity 108900 -> 1.0000%",
+    # THE v5.29 FIX: the exact false positive. Balance is a CLOSED 100000 and
+    # equity ratcheted to 110000 on open profit, then a fresh dip took equity
+    # to 108900 -- still 8900 ABOVE balance. There is NO floating loss at all.
+    print("\n-- v5.29 FIX: no false positive with the book in profit --")
+    ok &= checkf("equity 108900 ABOVE balance 100000 -> 0.0000%",
+                 floating_loss(100000, 108900), 0.0)
+    ok &= check("  ...so the branch does NOT fire",
+                floating_loss(100000, 108900) >= SAFETY_FLOAT, False)
+    # The retired measure fired here on a book that was never losing money.
+    ok &= checkf("retired trailing measure read 1.0000% from a 110000 peak",
                  floating_trailing(110000, 108900), 1.0)
-    ok &= check("trailing measure at the real threshold",
+    ok &= check("  ...and DID fire -- the false positive v5.29 removed",
                 floating_trailing(110000, 108900) >= SAFETY_FLOAT, True)
-    ok &= check("raw basis at 108900 also reads 0% -> blind",
-                floating_raw(108900, 108900) >= SAFETY_FLOAT, False)
+    # A book genuinely underwater on the day, but by less than 1%.
+    ok &= checkf("balance 100000/equity 99500 -> 0.5000% (real, under 1%)",
+                 floating_loss(100000, 99500), 0.5)
+    ok &= check("  ...does not breach",
+                floating_loss(100000, 99500) >= SAFETY_FLOAT, False)
 
-    # Flat account at its peak must never breach.
-    ok &= checkf("flat at peak -> 0.0000% give-back", floating_trailing(110000, 110000), 0.0)
-    ok &= check("flat account never breaches",
-                floating_trailing(110000, 110000) >= SAFETY_FLOAT, False)
-
-    # Zero-guard on the very first tick before OnInit populated the HWM.
-    ok &= check("zero equity-hwm guard -> 0.0", floating_trailing(0, 50000), 0.0)
-    ok &= check("  ...and cannot breach on uninitialised state",
-                floating_trailing(0, 50000) >= SAFETY_FLOAT, False)
-
-    # ---- Rule priority ----------------------------------------------------
-    print("\n-- Rule priority: floating checked first --")
-    # A state breaching BOTH the floating and daily limits must be handled by
-    # the floating branch, which is evaluated first and returns immediately.
-    # Reset balance 101500 and equity 98500 => daily 2.956% (below 3%) --
-    # so push the reset balance down to 100000 to breach both simultaneously.
-    eq, rb, hwm = 98500, 100000, 100000
-    f, d = floating_trailing(hwm, eq), daily_dd(rb, eq)
-    ok &= check("floating breached", f >= SAFETY_FLOAT, True)
-    ok &= check("daily NOT yet breached at 1.50%", d >= SAFETY_DAILY, False)
-    ok &= checkf("floating measured 1.5000%", f, 1.5)
-    ok &= checkf("daily measured 1.5000%", d, 1.5)
-
-    # True simultaneous breach: reset balance 100000, equity 96900.
-    #   daily  = 3.10%   -> breaches 3%
-    #   peak give-back = 3.10% from a 100000 peak -> also breaches 1%
-    f2, d2 = floating_trailing(100000, 96900), daily_dd(100000, 96900)
-    ok &= check("both fire simultaneously",
-                (f2 >= SAFETY_FLOAT, d2 >= SAFETY_DAILY), (True, True))
-    ok &= checkf("floating measured 3.1000%", f2, 3.1)
-    ok &= checkf("daily measured 3.1000%", d2, 3.1)
-
-    # ---- Rule interaction (v5.24) -----------------------------------------
-    print("\n-- v5.24 rule interaction: 1% floating vs 5% trailing on one basis --")
-    # With both rules on the equity HWM they compute the SAME quantity, so the
-    # tighter 1% threshold always trips first and the 5% check is a backstop.
-    # Pin that outcome explicitly rather than leaving it implicit.
+    # ---- Rule interaction (v5.29) -----------------------------------------
+    print("\n-- v5.29 interaction: 1% floating (balance) vs 5% trailing (HWM) --")
+    # The two rules are now on DIFFERENT bases, so the 5% trailing check is
+    # genuinely reachable. This is the dead-code fault v5.29 repaired: on the
+    # shared v5.24 basis the two values were equal at every point.
+    print("\n  [merged-basis defect, retired]")
     for eq in (100000, 109000, 99000, 95000, 94000):
         f = floating_trailing(100000, eq)
         t = total_dd(100000, eq)
-        ok &= checkf("  equity %d: floating == trailing (shared basis)" % eq, f, t)
+        ok &= checkf("    equity %d: retired floating == total_dd" % eq, f, t)
 
-    eq = 99000  # exactly 1% below the 100000 peak
-    f, t = floating_trailing(100000, eq), total_dd(100000, eq)
-    ok &= check("1% floating breaches here", f >= SAFETY_FLOAT, True)
-    ok &= check("5% trailing does NOT breach at the same give-back",
-                t >= SAFETY_TOTAL, False)
-    ok &= check("...so the floating branch fires first (as coded)",
-                (f >= SAFETY_FLOAT) and not (t >= SAFETY_TOTAL), True)
+    # Under v5.29, a book flat at a 100000 balance with equity pulled to 95000
+    # by open positions is 5.0% DOWN on floating loss AND 5.0% down on the
+    # trailing measure only if the peak was 100000 too. Distinguish the bases:
+    #   balance 100000, peak equity 110000, current equity 104500
+    #     floating = 0.00%  (equity is still well ABOVE balance)
+    #     trailing = 5.00%  (a full 5% given back from the equity peak)
+    ok &= checkf("floating reads 0.0000% (equity above balance)",
+                 floating_loss(100000, 104500), 0.0)
+    ok &= checkf("trailing reads 5.0000% (peak give-back)",
+                 total_dd(110000, 104500), 5.0)
+    ok &= check("5% trailing is now REACHABLE while floating stays silent",
+                (total_dd(110000, 104500) >= SAFETY_TOTAL,
+                 floating_loss(100000, 104500) >= SAFETY_FLOAT), (True, False))
+    # A day that is genuinely 1% down on open positions AND 5% off the peak.
+    ok &= checkf("floating 100000/99000 -> 1.0000%", floating_loss(100000, 99000), 1.0)
+    ok &= checkf("trailing from 105000 peak -> 5.7143%",
+                 total_dd(105000, 99000), 5.714285714285714)
+    ok &= check("both fire independently on their own bases",
+                (floating_loss(100000, 99000) >= SAFETY_FLOAT,
+                 total_dd(105000, 99000) >= SAFETY_TOTAL), (True, True))
 
-    # The 5% check is reachable only if the 1% input is raised above 5%.
-    eq = 94500  # 5.5% below peak
-    f, t = floating_trailing(100000, eq), total_dd(100000, eq)
-    ok &= check("at 5.50% both thresholds breached", (f >= 5.0, t >= SAFETY_TOTAL),
-                (True, True))
-    ok &= checkf("floating reads 5.5000%", f, 5.5)
-    ok &= checkf("trailing reads the same 5.5000%", t, 5.5)
+    # 3% daily DD is unaffected by the change -- measure it on the same book.
+    ok &= checkf("daily on the same book 100000/99000 -> 1.0000%",
+                 daily_dd(100000, 99000), 1.0)
+    ok &= check("daily does not breach at 1.00%",
+                daily_dd(100000, 99000) >= SAFETY_DAILY, False)
 
     print()
     print("=" * 78)
     print("RESULT:", "ALL CHECKS PASSED" if ok else "FAILURES PRESENT")
     print("=" * 78)
     print()
-    print("Threshold implemented: peak-equity give-back >= 1.00% halts the EA.")
-    print("v5.24: 5% trailing DD shares that equity basis and acts as a backstop.")
+    print("Thresholds: 1.00% floating (balance-vs-equity, v5.29) closes the")
+    print("basket and resumes trading; 3.00% daily pauses new orders; 5.00%")
+    print("trailing from peak EQUITY is the only PERMANENT halt.")
     return 0 if ok else 1
 
 

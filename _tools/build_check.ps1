@@ -6,13 +6,25 @@
 #
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File build_check.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File build_check.ps1 -Source <other tree>
+#
+# DEFAULT SOURCE (corrected v5.29, 24-09-2026):
+#   The default is the repository that CONTAINS this script (its parent folder),
+#   resolved at runtime. It previously hardcoded "C:\Users\vivek\Downloads\
+#   cline local work", an unrelated OTTO v5.00 snapshot. Every gate run in the
+#   v5.29 cycle therefore compiled that stale tree, reported 0 errors / 0
+#   warnings, and green-lit a commit whose real source would not compile (the
+#   dropped `equity` declaration). A gate that validates a tree other than the
+#   one being shipped is worse than no gate: fix the default and prove it below.
 
 param(
-    [string]$Source = "C:\Users\vivek\Downloads\cline local work",
+    [string]$Source = (Split-Path -Parent $PSScriptRoot),
     [string]$MetaEditor = "C:\Program Files\Five Percent Online MetaTrader 5\MetaEditor64.exe",
     [string]$Entry = "otto.mq5",
     [switch]$NoDeploy
 )
+
+$Source = (Resolve-Path -LiteralPath $Source).Path
 
 $ErrorActionPreference = "Stop"
 
@@ -28,6 +40,53 @@ Write-Host "source    : $Source"
 Write-Host "metaeditor: $MetaEditor"
 Write-Host "entry     : $Entry"
 Write-Host "buildRoot : $buildRoot"
+
+# --- Source-provenance guard ---------------------------------------------
+# A gate is only meaningful if it compiles the tree it claims to compile. The
+# 24-09-2026 v5.29 escape happened because the default -Source pointed at an
+# unrelated snapshot, so "0 errors, 0 warnings" described the wrong code. From
+# now on the gate refuses to run against a directory that does not look like the
+# OTTO repo, and it prints the version stamp it is about to build so a mismatch
+# against the intended release is obvious in the log.
+if (-not (Test-Path -LiteralPath $Source)) {
+    Write-Host "FATAL: source directory not found: $Source"
+    exit 2
+}
+$srcEntry = Join-Path $Source $Entry
+if (-not (Test-Path -LiteralPath $srcEntry)) {
+    Write-Host "FATAL: entry file not found in source: $srcEntry"
+    exit 2
+}
+
+# Require the OTTO module family to be present in the source directory. This is
+# what distinguishes the real repo from an arbitrary/stale folder.
+$requiredInSource = @("OttoDefines.mqh", "COttoRiskManager.mqh", "COttoNewsFilter.mqh")
+$missingSrc = @()
+foreach ($r in $requiredInSource) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Source $r))) { $missingSrc += $r }
+}
+if ($missingSrc.Count -gt 0) {
+    Write-Host "FATAL: -Source does not look like the OTTO repo; missing:"
+    $missingSrc | ForEach-Object { Write-Host "  $_" }
+    Write-Host "Refusing to run: a gate over the wrong tree reports a meaningless green."
+    exit 2
+}
+
+# Echo the version stamps this run is about to validate.
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$isRepoTree = $Source.TrimEnd('\') -ieq $repoRoot.TrimEnd('\')
+if (-not $isRepoTree) {
+    Write-Host "WARNING: -Source overrides the repo default; this gate is NOT validating $repoRoot"
+}
+$srcStamps = @()
+foreach ($f in (@($Entry) + $requiredInSource)) {
+    $p = Join-Path $Source $f
+    $m = Select-String -LiteralPath $p -Pattern '#property\s+version\s+"([^"]+)"' -List |
+         Select-Object -First 1
+    if ($m) { $srcStamps += ("{0}={1}" -f $f, $m.Matches[0].Groups[1].Value) }
+    else    { $srcStamps += ("{0}=<no version property>" -f $f) }
+}
+Write-Host ("source version stamps: " + ($srcStamps -join ", "))
 Write-Host ""
 
 if (-not (Test-Path $MetaEditor)) {
@@ -241,6 +300,9 @@ Write-Host "=================================================================="
 $nErr = $errors.Count
 $nWarn = $warnings.Count
 $ex5 = Get-ChildItem $experts -Filter "*.ex5" -File -ErrorAction SilentlyContinue
+
+Write-Host "gate source : $Source"
+Write-Host ("version(s)  : " + ($srcStamps -join ", "))
 
 if ($ignored.Count -gt 0) {
     Write-Host ("ignored pragma/informational lines: {0}" -f $ignored.Count)

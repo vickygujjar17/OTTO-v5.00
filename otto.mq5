@@ -726,6 +726,13 @@ void OnTick(void)
    // ================================================================
    if(!g_dailyDD_Paused && !g_totalDD_Halted)
      {
+      // FIX (v5.29): both account figures are read once, here, before any rule
+      // consumes them. (v5.29 regression: the floating-loss rewrite replaced the
+      // comment block under this line and dropped the `equity` declaration with
+      // it, orphaning the eight downstream uses below.)
+      double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+
       // FIX (v5.24): single equity high-water mark. The trailing total-DD limit
       // previously trailed the peak CLOSED balance; it now trails peak EQUITY,
       // matching GFT's all-time-equity trailing drawdown. This is the basis of
@@ -755,7 +762,7 @@ void OnTick(void)
       //     init), so an ordinary dip permanently bricked the account.
       // The corrected ratio cannot reproduce the false positive: when the book
       // is flat, equity == balance and it reads exactly 0.
-      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+      // (equity / balance are declared once at the top of this block.)
       double floatingLoss = (balance > 0 && equity < balance)
                             ? 100.0 * (balance - equity) / balance
                             : 0.0;

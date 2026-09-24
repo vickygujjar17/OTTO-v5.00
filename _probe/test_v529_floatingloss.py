@@ -155,8 +155,14 @@ check("the 1% header sits inside the slice",
       "// 1% Max Floating Loss Rule" in FLOAT_BRANCH)
 
 # 6. Measures balance-vs-equity (NOT the equity HWM).
-check("1% branch reads ACCOUNT_BALANCE",
-      "AccountInfoDouble(ACCOUNT_BALANCE)" in FLOAT_BRANCH)
+# NOTE (v5.29 hotfix): `balance` and `equity` are now declared ONCE at the top of
+# the Step-0 block (see the declaration-integrity checks in section 14), not
+# inside this branch. The branch therefore consumes the variables; the
+# AccountInfoDouble(ACCOUNT_BALANCE) origin is asserted at block scope below.
+check("1% branch computes from a `balance` variable",
+      "balance" in FLOAT_BRANCH)
+check("the `balance` variable originates from AccountInfoDouble(ACCOUNT_BALANCE)",
+      "double balance = AccountInfoDouble(ACCOUNT_BALANCE)" in MQ5_T)
 check("1% branch computes (balance - equity) / balance",
       "(balance - equity) / balance" in FLOAT_BRANCH)
 check("1% branch floors profit at 0 (equity >= balance -> 0.0)",
@@ -260,6 +266,92 @@ check("OttoDefines description names v5.29",
 check("otto.mq5 port banner reads v5.29",
       "Pine Script Master Build Port (v5.29)" in MQ5_T)
 check("otto.mq5 init banner reads v5.29", "OTTO EA v5.29" in MQ5_T)
+
+# 14. DECLARATION INTEGRITY of the Step-0 safety block (regression guard).
+#     Rationale: the v5.29 patch rewrote the 1% rule inside this block and, as a
+#     side effect of replacing the comment span beneath the opening brace, deleted
+#     `double equity = AccountInfoDouble(ACCOUNT_EQUITY);`. Nothing in the test
+#     suite noticed, because every earlier check tests BEHAVIOUR (regexes over the
+#     source) rather than COMPILABILITY. The compiler is the only authority on
+#     undeclared identifiers, and the gate that should have run it was pointed at
+#     another directory (see build_check.ps1). These checks assert the property
+#     that actually failed: every identifier the block uses is declared exactly
+#     once, and declared before first use.
+import re as _re
+
+SAFETY_BLOCK = slice_between("// STEP 0: PROP FIRM SAFETY CHECKS",
+                             "// STEP 1: News Filter")
+check("Step-0 safety block located", len(SAFETY_BLOCK) > 2000,
+      "len=%d" % len(SAFETY_BLOCK))
+
+# Strip // comments so prose that NAMES an identifier is not counted as a use.
+SAFETY_CODE = "\n".join(l.split("//")[0] for l in SAFETY_BLOCK.split("\n"))
+
+
+def _decl_count(ident):
+    return len(_re.findall(r"\b(?:double|int|long|bool|string|datetime)\s+%s\b"
+                           % ident, SAFETY_CODE))
+
+
+def _use_count(ident):
+    # \b treats '_' as a word char, so this correctly ignores g_equityHighWaterMark.
+    return len(_re.findall(r"\b%s\b" % ident, SAFETY_CODE))
+
+
+def _first_decl_pos(ident):
+    m = _re.search(r"\b(?:double|int|long|bool|string|datetime)\s+%s\b" % ident,
+                   SAFETY_CODE)
+    return m.start() if m else -1
+
+
+def _first_use_pos(ident):
+    m = _re.search(r"\b%s\b" % ident, SAFETY_CODE)
+    return m.start() if m else -1
+
+
+# `equity` was the identifier orphaned by v5.29: 1 declaration + 8 uses. The
+# 5.29 commit shipped with 0 declarations and exactly 8 uses, which is why the
+# compiler emitted exactly 8 x "error 256: undeclared identifier 'equity'".
+check("`equity` is declared exactly once in the safety block",
+      _decl_count("equity") == 1, "found %d" % _decl_count("equity"))
+check("`balance` is declared exactly once in the safety block",
+      _decl_count("balance") == 1, "found %d" % _decl_count("balance"))
+check("`equity` has 8 uses + 1 declaration (the 8 that failed to compile)",
+      _use_count("equity") == 9, "found %d" % _use_count("equity"))
+check("`equity` is declared BEFORE its first use",
+      _first_decl_pos("equity") >= 0
+      and _first_decl_pos("equity") <= _first_use_pos("equity"))
+check("`balance` is declared BEFORE its first use",
+      _first_decl_pos("balance") >= 0
+      and _first_decl_pos("balance") <= _first_use_pos("balance"))
+
+# The declaration must read the right account property, and both must be read
+# from the terminal rather than hardcoded or carried over from another scope.
+check("the `equity` declaration reads AccountInfoDouble(ACCOUNT_EQUITY)",
+      _re.search(r"double\s+equity\s*=\s*AccountInfoDouble\(ACCOUNT_EQUITY\)",
+                 SAFETY_CODE) is not None)
+check("the `balance` declaration reads AccountInfoDouble(ACCOUNT_BALANCE)",
+      _re.search(r"double\s+balance\s*=\s*AccountInfoDouble\(ACCOUNT_BALANCE\)",
+                 SAFETY_CODE) is not None)
+
+# No OTHER identifier in the block may be used without a declaration in the
+# block, in the file's globals, or as a known MQL5/OTTO API. This is a coarse
+# net: it flags the specific class of defect (a use with no local declaration
+# and no global), without pretending to reimplement the MQL5 compiler.
+GLOBALS = set(_re.findall(r"^\s*(?:static\s+)?(?:\w+\s+)+(g_\w+)\s*(?:=|;|\[)",
+                          MQ5_T, _re.M))
+LOCAL_DECLS = set(_re.findall(r"\b(?:double|int|long|bool|string|datetime)\s+"
+                              "(\w+)\s*=", SAFETY_CODE))
+check("every g_* identifier used in the block has a file-scope declaration",
+      all(v in GLOBALS for v in _re.findall(r"\b(g_\w+)\b", SAFETY_CODE)),
+      "missing: %s" % sorted({v for v in _re.findall(r"\b(g_\w+)\b", SAFETY_CODE)
+                              if v not in GLOBALS}))
+
+# Positive control: the two account values must NOT be re-declared later in the
+# block, which would be a duplicate-definition error rather than a missing one.
+check("neither account value is re-declared further down the block",
+      _decl_count("equity") == 1 and _decl_count("balance") == 1,
+      "one declaration each, at the top of the block")
 
 
 def main():

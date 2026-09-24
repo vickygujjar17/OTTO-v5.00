@@ -186,7 +186,15 @@ private:
          attempts++;
          request.deviation = MaxSlippage;
          request.magic     = MagicNumber;
-         request.comment   = BuildOrderComment(0, 0);   // v5.27: session ID, clamped to 31
+         // v5.29 FIX: the CALLER's comment is preserved, never clobbered.
+         // Every entry path now tags its own order with the trade reason,
+         // the block serial and the tranche
+         // (#OTTO-<SYM>-<SUP|RES|REV>-BLK<n>-T<n>). The old unconditional
+         // rebuild here reset all three tags to a bare session ID on the
+         // first retry. Only synthesise a comment when a caller left the
+         // field empty (defensive; all current callers set one).
+         if(request.comment == "")
+            request.comment = BuildOrderComment(0, 0);
          request.type_filling = GetFillingMode();   // dynamic FOK/IOC/RETURN
          ResetLastError();
          if(OrderSend(request, result))
@@ -283,24 +291,32 @@ private:
    //| PINE GATE — can_place: flat OR (long & resistance) OR (short &  |
    //| support). Mirrors strategy.position_size logic.                 |
    //+------------------------------------------------------------------+
-   //| v5.27 — ORDER COMMENT BUILDER                                    |
+   //| v5.29 — ORDER COMMENT BUILDER                                    |
    //|                                                                  |
    //| MT5 hard-caps MqlTradeRequest::comment at 31 characters and      |
    //| truncates silently past that, so EVERY comment this file sends   |
    //| is routed through here and clamped explicitly.                   |
    //|                                                                  |
-   //| Identifier precedence:                                           |
-   //|   1. the live journal session ID  (#OTTO-<SYM>-<date>-<time>-BLKn)
-   //|   2. a locally synthesised form from the block serial             |
-   //| A tranche tag is appended for pyramided fills.                    |
+   //| v5.29 layout (built by BuildOrderComment):                       |
+   //|   #OTTO-<SYM>-<REASON>-BLK<n>[-T<n>]                             |
+   //|   e.g. #OTTO-EURUSD-RES-BLK12-T2  (25 chars) — always fits.      |
+   //| The reason tag is dropped for non-entry ops, giving              |
+   //|   #OTTO-<SYM>-BLK<n>.                                            |
+   //|                                                                  |
+   //| WHY THIS STILL CLAMPS: the builder's per-field budget assumes a  |
+   //| short symbol. A suffixed broker symbol (XAUUSD.m), a recycled    |
+   //| block serial or a long tranche index can still overflow, and the  |
+   //| clamp is the single guaranteed backstop. It also keeps the legacy |
+   //| #OTTO-<SYM>-<date>-<time>-BLK<n> session-ID form correct if any    |
+   //| caller ever passes one in.                                        |
    //|                                                                  |
    //| WHY THIS DOESN'T JUST DO StringSubstr(s, 0, 31):                  |
-   //| the raw session ID is ~33-36 chars, so a HEAD truncation chops    |
-   //| off the "-BLK<n>" tail — the one field that identifies which      |
-   //| setup the order belongs to. Instead the date component is        |
-   //| dropped first, and only then is a tail-preserving clamp applied.  |
-   //| The result keeps the symbol, the time and the block serial,       |
-   //| which is what makes a terminal row identifiable at a glance.      |
+   //| a HEAD truncation chops off the "-BLK<n>" tail — the one field    |
+   //| that identifies which setup the order belongs to. Instead the     |
+   //| date component (when present) is dropped first, and only then is  |
+   //| a tail-preserving clamp applied. The result keeps the symbol, the |
+   //| reason, the time/serial and the tranche tag, which is what makes  |
+   //| a terminal row identifiable at a glance.                          |
    //+------------------------------------------------------------------+
    string                  ClampOrderComment(string s)
      {
@@ -354,16 +370,55 @@ private:
       return s;
      }
 
-   string                  BuildOrderComment(const int blockSerial = 0, const int tranche = 0)
+   //+------------------------------------------------------------------+
+   //| v5.29 — TRADE-REASON TAGS                                        |
+   //|                                                                  |
+   //| A block's polarity IS its trade thesis: a SUPPORT block is the    |
+   //| long/support setup, a RESISTANCE block is the short/resistance    |
+   //| one (mirrors Pine is_support). REV marks the market reversal      |
+   //| leg that flips a filled block. Encoding the reason lets a         |
+   //| terminal row or a post-mortem say WHY the order exists, not just  |
+   //| which serial it came from.                                        |
+   //+------------------------------------------------------------------+
+   string                  ReasonTagForBlock(const SSniperBlock &block)
      {
-      string base = "";
-      if(m_journal != NULL && m_journal.GetSessionID() != "")
-         base = m_journal.GetSessionID();
-      else if(m_sessionID != "")
-         base = m_sessionID;          // basket already owns a resolved ID
-      else
-         base = StringFormat("OTTO_%s_%d", m_symbol, blockSerial);
-      if(tranche > 1) base = base + "_T" + IntegerToString(tranche);
+      return (block.type == BLOCK_SUPPORT) ? "SUP" : "RES";
+     }
+
+   string                  ReasonTagForDir(ENUM_TRADE_DIRECTION dir)
+     {
+      // Direction is the faithful proxy for the source block's polarity
+      // (support => long), used where only the basket direction survives
+      // — notably the pyramid path, which has no block handle.
+      return (dir == DIR_LONG) ? "SUP" : "RES";
+     }
+
+   //+------------------------------------------------------------------+
+   //| v5.29 — ORDER COMMENT BUILDER                                    |
+   //|                                                                  |
+   //| Layout: #OTTO-<SYM>-<REASON>-BLK<n>[-T<n>]                        |
+   //|   e.g. #OTTO-EURUSD-RES-BLK12-T2      (25 chars, well under 31)   |
+   //|                                                                  |
+   //| Every field the audit needs is in the comment: the instrument,    |
+   //| the trade reason (SUP/RES/REV), the originating block serial and  |
+   //| the pyramid tranche. The REASON and tranche are optional so this  |
+   //| remains usable for non-entry ops (close / SL mod / delete).       |
+   //|                                                                  |
+   //| The date/time-stamped journal session ID is deliberately NOT the  |
+   //| comment base: at ~34 chars it leaves no room for a reason tag and  |
+   //| a tranche tag together. Nothing correlates order comments back to  |
+   //| the journal session ID (the journal names its own file), so the    |
+   //| trade-identifying triple wins the 31-character budget.            |
+   //| All output still passes through ClampOrderComment() below.        |
+   //+------------------------------------------------------------------+
+   string                  BuildOrderComment(const int blockSerial = 0,
+                                             const int tranche = 0,
+                                             const string reason = "")
+     {
+      string base = StringFormat("#OTTO-%s", m_symbol);
+      if(reason != "") base = base + "-" + reason;
+      base = base + StringFormat("-BLK%d", blockSerial);
+      if(tranche > 1) base = base + "-T" + IntegerToString(tranche);
       return ClampOrderComment(base);
      }
 
@@ -522,7 +577,7 @@ private:
       request.tp       = 0;   // NO TP — exact mirror of Pine (trail-only exits)
       request.deviation = MaxSlippage;
       request.magic    = MagicNumber;
-      request.comment  = BuildOrderComment(block.serial, 0);   // v5.27: clamped to 31
+      request.comment  = BuildOrderComment(block.serial, 1, ReasonTagForBlock(block));   // v5.29: #OTTO-<SYM>-<SUP|RES>-BLK<n>-T1
 
       if(request.volume < m_riskManager.GetVolumeMin() ||
          request.volume > m_riskManager.GetVolumeMax())
@@ -1001,7 +1056,7 @@ private:
       request.tp       = 0;
       request.deviation = MaxSlippage;
       request.magic    = MagicNumber;
-      request.comment  = TradeComment + "_REV";
+      request.comment  = BuildOrderComment(targetBlock.serial, 1, "REV");   // v5.29: #OTTO-<SYM>-REV-BLK<n>-T1
       if(SendOrderWithRetry(request, result))
         {
          SeedActiveTradeFromPosition(result.order);
@@ -1855,7 +1910,7 @@ public:
       req.tp       = 0;
       req.deviation = MaxSlippage;
       req.magic    = MagicNumber;
-      req.comment  = BuildOrderComment(m_activeTrade.sourceBlockSerial, tranche);   // v5.27: clamped to 31
+      req.comment  = BuildOrderComment(m_activeTrade.sourceBlockSerial, tranche, ReasonTagForDir(m_basketDir));   // v5.29: #OTTO-<SYM>-<SUP|RES>-BLK<n>-T<n>
       req.type_filling = GetFillingMode();
       if(SendOrderWithRetry(req, res))
         {

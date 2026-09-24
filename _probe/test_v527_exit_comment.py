@@ -54,6 +54,24 @@ def check(name, cond, detail=""):
     RESULTS.append((name, bool(cond), detail))
 
 
+def slice_between(start_marker, end_marker=None, text=None):
+    """Return the source slice from start_marker to end_marker (or +900 chars).
+
+    Used to assert on ONE function body without matching a same-named line
+    elsewhere in the file. Returns "" when the marker is absent.
+    """
+    text = OM_T if text is None else text
+    i = text.find(start_marker)
+    if i < 0:
+        return ""
+    if end_marker is None:
+        return text[i:i + 1800]
+    j = text.find(end_marker, i)
+    if j < 0:
+        return text[i:]
+    return text[i:j]
+
+
 # ----------------------------------------------------------------------
 # 0. Re-implementation of the shipped ClampOrderComment() in Python.
 #    Mirrors the MQL5 source so the length/tail guarantees can be asserted
@@ -88,13 +106,14 @@ def clamp_order_comment(s):
     return s
 
 
-def build_order_comment(session_id, symbol, block_serial, tranche=0):
-    if session_id:
-        base = session_id
-    else:
-        base = "OTTO_%s_%d" % (symbol, block_serial)
+def build_order_comment(symbol, block_serial, tranche=0, reason=""):
+    """v5.29 mirror: #OTTO-<SYM>-<REASON>-BLK<n>[-T<n>] then clamped."""
+    base = "#OTTO-%s" % symbol
+    if reason:
+        base = base + "-" + reason
+    base = base + "-BLK%d" % block_serial
     if tranche > 1:
-        base = base + "_T" + str(tranche)
+        base = base + "-T" + str(tranche)
     return clamp_order_comment(base)
 
 
@@ -228,31 +247,58 @@ check("CalcBasketFriction folds in half the spread",
 check("ClampOrderComment helper exists in COttoOrderManager",
       "ClampOrderComment(string s)" in OM_T)
 
-check("BuildOrderComment helper exists with blockSerial + tranche params",
-      re.search(r"BuildOrderComment\(const\s+int\s+blockSerial\s*=\s*0,\s*const\s+int\s+tranche\s*=\s*0\)",
+check("BuildOrderComment helper exposes blockSerial + tranche + reason",
+      re.search(r"BuildOrderComment\(const\s+int\s+blockSerial\s*=\s*0,\s*\n"
+                r"[\s\S]{0,120}?const\s+int\s+tranche\s*=\s*0,\s*\n"
+                r"[\s\S]{0,120}?const\s+string\s+reason\s*=\s*\"\"\)",
                 OM_T) is not None)
+
+check("comment layout is #OTTO-<SYM>[-<REASON>]-BLK<n>",
+      'StringFormat("#OTTO-%s", m_symbol)' in OM_T and
+      'StringFormat("-BLK%d", blockSerial)' in OM_T)
 
 check("clamp enforces the 31-char MT5 limit",
       re.search(r"MAX_COMMENT\s*=\s*31", OM_T) is not None)
 
-check("PlaceLimitOrder path uses BuildOrderComment(block.serial, 0)",
-      "request.comment  = BuildOrderComment(block.serial, 0);" in OM_T)
+check("PlaceLimitOrder path tags reason + block serial (T1)",
+      "request.comment  = BuildOrderComment(block.serial, 1, ReasonTagForBlock(block));" in OM_T)
 
-check("AddPyramidTranche path uses BuildOrderComment(..., tranche)",
-      "req.comment  = BuildOrderComment(m_activeTrade.sourceBlockSerial, tranche);" in OM_T)
+check("AddPyramidTranche path tags reason + tranche",
+      "req.comment  = BuildOrderComment(m_activeTrade.sourceBlockSerial, tranche, ReasonTagForDir(m_basketDir));" in OM_T)
+
+check("reversal path tags the REV reason",
+      'request.comment  = BuildOrderComment(targetBlock.serial, 1, "REV");' in OM_T)
 
 check("plain market path no longer sends bare TradeComment",
       "request.comment   = TradeComment;" not in OM_T)
 
+check("no unclamped TradeComment+_REV concatenation remains",
+      'TradeComment + "_REV"' not in OM_T)
+
 check("no unclamped TradeComment+_PYR_T concatenation remains",
       'TradeComment + "_PYR_T"' not in OM_T)
 
-check("helper falls back to OTTO_<sym>_<serial> when journal is absent",
-      re.search(r'StringFormat\("OTTO_%s_%d",\s*m_symbol,\s*blockSerial\)', OM_T) is not None)
+# --- v5.29 contract: SendOrderWithRetry must NOT clobber the caller's comment ---
+OM_SEND = slice_between("bool                    SendOrderWithRetry(")
+check("SendOrderWithRetry no longer unconditionally rebuilds request.comment",
+      "request.comment   = BuildOrderComment(0, 0);" not in OM_SEND)
+check("SendOrderWithRetry rebuilds only when the caller left the comment empty",
+      'if(request.comment == "")' in OM_SEND and
+      "request.comment = BuildOrderComment(0, 0);" in OM_SEND)
+check("SendOrderWithRetry no longer forces the magic over a caller's tag",
+      "request.magic     = MagicNumber;" in OM_SEND)
 
-check("helper NULL-guards the journal pointer",
-      re.search(r"if\(m_journal\s*!=\s*NULL\s*&&\s*m_journal\.GetSessionID\(\)\s*!=\s*\"\"\)",
+# --- v5.29 contract: reason helpers map polarity/direction correctly ----------
+check("ReasonTagForBlock maps SUPPORT -> SUP",
+      re.search(r"ReasonTagForBlock\(const\s+SSniperBlock\s+&block\)\s*\n\s*\{\s*\n"
+                r"\s*return\s*\(block\.type\s*==\s*BLOCK_SUPPORT\)\s*\?\s*\"SUP\"\s*:\s*\"RES\";",
                 OM_T) is not None)
+check("ReasonTagForDir maps DIR_LONG -> SUP",
+      re.search(r"ReasonTagForDir\(ENUM_TRADE_DIRECTION\s+dir\)\s*\n\s*\{\s*\n"
+                r"[\s\S]{0,240}?return\s*\(dir\s*==\s*DIR_LONG\)\s*\?\s*\"SUP\"\s*:\s*\"RES\";",
+                OM_T) is not None)
+check("no unclamped TradeComment concatenation remains in the builder",
+      "base = m_journal.GetSessionID();" not in OM_T)
 
 check("CalcBasketFriction feeds the LONG breakeven block",
       re.search(r"double\s+beOffset\s*=\s*CalcBasketFriction\(true\)\s*;", TM_T) is not None)
@@ -296,23 +342,28 @@ PATHO = "#OTTO-" + "X" * 60 + "-20260922-143005-BLK1"
 check("clamp handles pathological over-long id",
       len(clamp_order_comment(PATHO)) <= 31)
 
-t3 = build_order_comment(LONG_ID, "EURUSD", 3, tranche=3)
-check("tranche tag survives clamping", "_T3" in t3, t3)
+t3 = build_order_comment("EURUSD", 3, tranche=3, reason="SUP")
+check("tranche tag survives clamping", "-T3" in t3, t3)
 check("tranche result <= 31", len(t3) <= 31, "len=%d" % len(t3))
+check("tranche comment carries the reason tag", "-SUP-" in t3, t3)
 
-fb = build_order_comment("", "XAUUSD", 7)
-check("fallback builds OTTO_<sym>_<serial>", fb == "OTTO_XAUUSD_7", fb)
-check("fallback <= 31", len(fb) <= 31)
+rev = build_order_comment("XAUUSD", 7, tranche=1, reason="REV")
+check("reversal reason tag is carried", rev == "#OTTO-XAUUSD-REV-BLK7", rev)
+check("reversal comment <= 31", len(rev) <= 31)
+
+plain = build_order_comment("XAUUSD", 7)
+check("reason tag is optional (non-entry ops)", plain == "#OTTO-XAUUSD-BLK7", plain)
+check("plain comment <= 31", len(plain) <= 31)
 
 worst = 0
-for sid in (LONG_ID, SUFX_ID, "", "#OTTO-XAUUSD.m-20260922-235959-BLK99"):
-    for sym in ("EURUSD", "XAUUSD", "GBPJPY", "AUDCAD"):
-        for ser in (1, 99, 9999):
-            for tr in (0, 2, 3):
-                c = build_order_comment(sid, sym, ser, tr)
+for sym in ("EURUSD", "XAUUSD", "GBPJPY", "AUDCAD"):
+    for ser in (1, 99, 9999):
+        for tr in (0, 2, 3):
+            for rs in ("", "SUP", "RES", "REV"):
+                c = build_order_comment(sym, ser, tr, rs)
                 if len(c) > worst:
                     worst = len(c)
-                assert len(c) <= 31, (sid, sym, ser, tr, c)
+                assert len(c) <= 31, (sym, ser, tr, rs, c)
 check("exhaustive combo sweep never exceeds 31", worst <= 31, "max=%d" % worst)
 
 # ----------------------------------------------------------------------

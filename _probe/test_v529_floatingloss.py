@@ -257,15 +257,16 @@ check("init log labels the floating input as % of balance",
 # 13. Version stamps.
 for f in ALL_FILES:
     txt = read(os.path.join(ROOT, f))
-    check("5.29 stamped in %s" % f, '#property version   "5.29"' in txt)
-    check("no 5.28 property stamp in %s" % f,
-          '#property version   "5.28"' not in txt)
-check("OttoDefines banner names v5.29", "OTTO EA v5.29" in DEFS_T)
-check("OttoDefines description names v5.29",
-      '#property description "OTTO v5.29' in DEFS_T)
-check("otto.mq5 port banner reads v5.29",
-      "Pine Script Master Build Port (v5.29)" in MQ5_T)
-check("otto.mq5 init banner reads v5.29", "OTTO EA v5.29" in MQ5_T)
+    check("5.30 stamped in %s" % f, '#property version   "5.30"' in txt)
+    check("no 5.28/5.29 property stamp in %s" % f,
+          '#property version   "5.28"' not in txt
+          and '#property version   "5.29"' not in txt)
+check("OttoDefines banner names v5.30", "OTTO EA v5.30" in DEFS_T)
+check("OttoDefines description names v5.30",
+      '#property description "OTTO v5.30' in DEFS_T)
+check("otto.mq5 port banner reads v5.30",
+      "Pine Script Master Build Port (v5.30)" in MQ5_T)
+check("otto.mq5 init banner reads v5.30", "OTTO EA v5.30" in MQ5_T)
 
 # 14. DECLARATION INTEGRITY of the Step-0 safety block (regression guard).
 #     Rationale: the v5.29 patch rewrote the 1% rule inside this block and, as a

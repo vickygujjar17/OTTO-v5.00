@@ -4,7 +4,7 @@
 //|            OTTO EA - Cut / Cost-BE / ATR Trail / Pyramiding       |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.29"
+#property version   "5.30"
 
 #ifndef __OTTO_TRADE_MANAGER__
 #define __OTTO_TRADE_MANAGER__
@@ -340,6 +340,9 @@ public:
 
    // Re-arms the latch when the book is flat, so the guard fires at most once
    // per basket instead of once per tick.
+   // v5.30 FIX: the flat->book transition in otto.mq5 (JournalCheckEvents,
+   // "TRADE CLOSED") now CALLS this. Before that the latch was only cleared by
+   // the constructor, so the guard fired once per EA session, not per basket.
    void              ArmQuorumGuard(void)  { m_quorumFireLatched = false; }
 
    int               GetTradesManaged(void) const     { return m_tradesManaged; }

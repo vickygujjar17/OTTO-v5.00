@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.29 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.30 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.29"
-#property description "OTTO v5.29 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
+#property version   "5.30"
+#property description "OTTO v5.30 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -305,7 +305,7 @@ input double   SafetyMaxFloatingLoss = 1.0;   // Hard breach: close all + halt i
 // balance on init so a restart cannot carry a finished session's budget.
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.29"
+input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.30"
 input group "══════════════════════════════════════════════════"
 // FIX (v5.26): portfolio-wide consensus engine ported from the theoretical
 // Base/Quote + Regional Affinity model. Additive to the per-chart

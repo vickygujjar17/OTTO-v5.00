@@ -16,7 +16,9 @@ Pins the behaviour that cannot be exercised by the MQL5 compiler gate:
   9. Trade manager: filter injected, open-age gate, one-shot latch.
  10. Order manager: sweep exists, sets VETO_CORRELATION, is reachable.
  11. otto.mq5 wires the filter into Initialize and calls the sweep.
- 12. Version stamp 5.29 present.
+ 12. Version stamp 5.30 present.
+ 13. v5.30: the flat->book transition calls ArmQuorumGuard so the active-trade
+     guard fires once per BASKET, not once per EA session.
 
 Pure static analysis of the shipped sources - no MT5 required.
 """
@@ -200,6 +202,20 @@ check("liquidation routes through CloseEntireBasket",
 check("guard runs before the trailing ladder",
       TM_T.find("QUORUM CONTRADICTION GUARD") < TM_T.find("double atr = GetCurrentATR();"))
 
+# ---------------------------------------------------------------- 8b (v5.30)
+# The once-PER-BASKET contract only holds if the flat transition actually CALLS
+# the re-arm. Landed in v5.30: m_quorumFireLatched was previously cleared only
+# by the constructor, so the guard fired once per EA session.
+check("ArmQuorumGuard is public on the trade manager",
+      "void              ArmQuorumGuard(void)" in TM_T)
+check("otto.mq5 calls ArmQuorumGuard on the flat transition",
+      "g_tradeManager.ArmQuorumGuard();" in MQ5_T)
+check("ArmQuorumGuard call sits inside the TRADE CLOSED transition",
+      0 < MQ5_T.find('JournalWrite("TRADE CLOSED"')
+      < MQ5_T.find("g_tradeManager.ArmQuorumGuard();")
+      < MQ5_T.find("g_lastHadTrade = nowActive;"))
+check("the re-arm is documented at the definition", "v5.30 FIX" in TM_T)
+
 # ---------------------------------------------------------------- 9
 check("order manager exposes GetBasketOpenTime",
       "GetBasketOpenTime(void) const { return m_basketOpenTime; }" in OM_T)
@@ -233,9 +249,10 @@ check("quorum sweep runs after the consensus sweep",
 for f in ALL_FILES:
     p = os.path.join(ROOT, f)
     txt = read(p)
-    check("version 5.29 stamped in %s" % f, '5.29' in txt)
+    check("version 5.30 stamped in %s" % f, '5.30' in txt)
 check("no stale 5.27/5.28 property stamp in OttoDefines",
-      'version   "5.27"' not in DEFS_T and 'version   "5.28"' not in DEFS_T)
+      'version   "5.27"' not in DEFS_T and 'version   "5.28"' not in DEFS_T
+      and 'version   "5.29"' not in DEFS_T)
 
 
 # ---------------------------------------------------------------- CRLF

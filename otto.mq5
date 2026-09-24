@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.29)            |
+//|                    Pine Script Master Build Port (v5.30)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.29"
+#property version   "5.30"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -300,7 +300,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.29 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.30 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -998,9 +998,17 @@ void JournalCheckEvents(void)
      { g_lastTrail = trail; JournalWrite("SL -> DYNAMIC TRAIL ACTIVE", ""); }
 
    // --- TRADE CLOSED (active->flat transition) ---
+   // v5.30 FIX: re-arm the quorum latch on the flat transition. ArmQuorumGuard()
+   // clears m_quorumFireLatched, which would otherwise only be cleared by the
+   // constructor -- so the active-trade guard fired ONCE PER EA SESSION rather
+   // than once per basket. Arming here means each new basket gets its own shot
+   // at the once-per-basket contradiction cut.
    bool nowActive = g_orderManager.HasActiveTrade();
    if(g_lastHadTrade && !nowActive)
-     JournalWrite("TRADE CLOSED", "");
+     {
+      JournalWrite("TRADE CLOSED", "");
+      g_tradeManager.ArmQuorumGuard();
+     }
    g_lastHadTrade = nowActive;
   }
 

@@ -1,8 +1,15 @@
 # build_check.ps1 -- OTTO EA strict compilation gate
 #
 # Stages a temporary MQL5 build tree that mirrors the MetaTrader terminal
-# layout so that `#include "../Include/Otto/*.mqh"` resolves, compiles via the
-# MetaEditor CLI, and reports the exact error/warning counts.
+# layout so that the angle-bracket includes `<Otto/*.mqh>` resolve, compiles via
+# the MetaEditor CLI, and reports the exact error/warning counts.
+#
+# NOTE (24-09-2026): this entry previously read `#include "../Include/Otto/*.mqh"`.
+# That has never been the form used by otto.mq5 -- it uses angle brackets, which
+# MetaEditor resolves by RECURSIVE FILE-NAME search of the live terminal's
+# MQL5\Include tree. Because this gate isolates itself with /inc it cannot detect
+# a shadowing legacy header in the terminal; use _tools\deploy_to_terminal.ps1
+# and _tools\check_deploy_drift.py for that.
 #
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File build_check.ps1

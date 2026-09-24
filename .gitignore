@@ -20,3 +20,9 @@ desktop.ini
 _tools/__pycache__/
 *.pyc
 
+# --- redundant local checkouts of this same repo -------------------------
+# OTTO-v5.00/ is a separate clone of github.com/vickygujjar17/OTTO-v5.00.git
+# kept inside this working tree (at v5.27). It has its own .git, so adding it
+# would record a broken "gitlink" (phantom submodule) instead of its files.
+# Ignore it; delete the folder once it is no longer needed.
+OTTO-v5.00/

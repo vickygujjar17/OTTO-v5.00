@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.31"
+#property version   "5.32"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -528,6 +528,67 @@ private:
       double atr = m_blockManager.GetATR();
       if(atr <= 0) return false;
       double entryPrice = NormalizeDouble(CalcEntryPrice(block), _Digits);
+
+      // v5.32 — MT5-EXACT PENDING-PRICE BOUNDARY GUARD
+      // The server refuses a pending order whose price is on the wrong side of
+      // the spread: a BUY LIMIT must rest strictly BELOW the Ask and a SELL
+      // LIMIT strictly ABOVE the Bid. If the market gaps through the zone
+      // between arming and placement, OrderSend() answers with
+      // TRADE_RETCODE_INVALID_PRICE (10015) and the journal logs
+      // "[Invalid price]" -- the retry ladder then burns for nothing.
+      // Validate locally on the SAME side of the spread the server uses,
+      // widened by the broker's stops/freeze buffer.
+      double minPendDist = MathMax((double)SymbolInfoInteger(m_symbol, SYMBOL_TRADE_STOPS_LEVEL),
+                                   (double)SymbolInfoInteger(m_symbol, SYMBOL_TRADE_FREEZE_LEVEL)) *
+                           SymbolInfoDouble(m_symbol, SYMBOL_POINT);
+      double liveAsk = GetAsk();
+      double liveBid = GetBid();
+
+      if(block.type == BLOCK_SUPPORT)
+        {
+         // BUY LIMIT: valid iff entry < Ask. Clamp the entry down onto the
+         // legal boundary rather than discarding an otherwise sound zone.
+         if(entryPrice >= liveAsk - minPendDist)
+           {
+            double clamped = NormalizeDouble(liveAsk - minPendDist, _Digits);
+            if(clamped > 0)
+               entryPrice = clamped;
+            else
+              {
+               block.isVetoed   = true;
+               block.vetoReason = VETO_PRICE_INVALID;
+               m_blockManager.SetBlockAt(blockIndex, block);
+               if(EnableLogging)
+                  Print("[OrderManager] PRICE GUARD: BUY LIMIT ",
+                        DoubleToString(entryPrice, _Digits), " >= Ask ",
+                        DoubleToString(liveAsk, _Digits), " on ", m_symbol,
+                        " — block latched dead (unclampable)");
+               return false;
+              }
+           }
+        }
+      else
+        {
+         // SELL LIMIT: valid iff entry > Bid.
+         if(entryPrice <= liveBid + minPendDist)
+           {
+            double clamped = NormalizeDouble(liveBid + minPendDist, _Digits);
+            if(clamped > 0)
+               entryPrice = clamped;
+            else
+              {
+               block.isVetoed   = true;
+               block.vetoReason = VETO_PRICE_INVALID;
+               m_blockManager.SetBlockAt(blockIndex, block);
+               if(EnableLogging)
+                  Print("[OrderManager] PRICE GUARD: SELL LIMIT ",
+                        DoubleToString(entryPrice, _Digits), " <= Bid ",
+                        DoubleToString(liveBid, _Digits), " on ", m_symbol,
+                        " — block latched dead (unclampable)");
+               return false;
+              }
+           }
+        }
 
       // HARD ANTI-DUPLICATE CHECK against MT5's live pending-order book.
       // If an order of ours already rests at (near) this price, do NOT send
@@ -1676,6 +1737,7 @@ public:
                    else if(blocks[i].vetoReason == VETO_BROKEN)     cancelReason = "Block Broken";
                    else if(blocks[i].vetoReason == VETO_FLIPPED)    cancelReason = "Block Flipped";
                    else if(blocks[i].vetoReason == VETO_CORRELATION) cancelReason = "Vector Consensus Veto";
+                   else if(blocks[i].vetoReason == VETO_PRICE_INVALID) cancelReason = "Limit Price Past Market";
                    else if(blocks[i].pendingOrderCancel)           cancelReason = "Manual / Direction Conflict";
                    MqlDateTime ctm; TimeToStruct(TimeCurrent(), ctm);
                    string cts = StringFormat("%04d%02d%02d-%02d%02d%02d", ctm.year, ctm.mon, ctm.day, ctm.hour, ctm.min, ctm.sec);

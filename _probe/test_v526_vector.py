@@ -168,12 +168,12 @@ if opp:
 
 check("InpConsensusVetoThreshold defaults to 50",
       re.search(r"InpConsensusVetoThreshold\s*=\s*50", DEFS_T) is not None)
-check("InpEnableVectorEngine defaults true",
-      re.search(r"InpEnableVectorEngine\s*=\s*true", DEFS_T) is not None)
+check("InpEnableVectorEngine defaults false (v5.32 rollback)",
+      re.search(r"InpEnableVectorEngine\s*=\s*false", DEFS_T) is not None)
 check("InpUseExternalAnchors defaults true",
       re.search(r"InpUseExternalAnchors\s*=\s*true", DEFS_T) is not None)
-check("InpCancelOpposingPendings defaults true",
-      re.search(r"InpCancelOpposingPendings\s*=\s*true", DEFS_T) is not None)
+check("InpCancelOpposingPendings defaults false (v5.32 rollback)",
+      re.search(r"InpCancelOpposingPendings\s*=\s*false", DEFS_T) is not None)
 
 
 # ----------------------------------------------------------------------

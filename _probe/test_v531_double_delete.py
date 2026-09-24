@@ -15,7 +15,7 @@ Pins the fix that cannot be exercised by the MQL5 compiler gate:
      "[Invalid request]" (retcode 10013 / error 4756).
   5. An UNARMED cycle still deletes (the orphan path stays live).
   6. The ledger is cold-started on construct and reset on Initialize.
-  7. Version stamp 5.31 present in all 10 files; 5.30 rejected.
+  7. Version stamp 5.32 present in all 10 files; 5.30/5.31 rejected.
 
 Pure static analysis of the shipped sources - no MT5 required.
 """
@@ -271,23 +271,26 @@ check("ledger reset in Initialize",
 # ---------------------------------------------------------------- 8
 for f in ALL_FILES:
     txt = read(os.path.join(ROOT, f))
-    check("5.31 stamped in %s" % f, '#property version   "5.31"' in txt)
-    check("no 5.30 property stamp in %s" % f,
-          '#property version   "5.30"' not in txt)
+    check("5.32 stamped in %s" % f, '#property version   "5.32"' in txt)
+    check("no 5.30/5.31 property stamp in %s" % f,
+          '#property version   "5.30"' not in txt
+          and '#property version   "5.31"' not in txt)
     check("no 5.28/5.29 property stamp in %s" % f,
           '#property version   "5.28"' not in txt
           and '#property version   "5.29"' not in txt)
 
-check("OttoDefines banner names v5.31", "OTTO EA v5.31" in DEFS_T)
-check("OttoDefines description names v5.31",
-      '#property description "OTTO v5.31' in DEFS_T)
-check("otto.mq5 port banner reads v5.31",
-      "Pine Script Master Build Port (v5.31)" in MQ5_T)
-check("otto.mq5 init banner reads v5.31", "OTTO EA v5.31" in MQ5_T)
+check("OttoDefines banner names v5.32", "OTTO EA v5.32" in DEFS_T)
+check("OttoDefines description names v5.32",
+      '#property description "OTTO v5.32' in DEFS_T)
+check("otto.mq5 port banner reads v5.32",
+      "Pine Script Master Build Port (v5.32)" in MQ5_T)
+check("otto.mq5 init banner reads v5.32", "OTTO EA v5.32" in MQ5_T)
 
 # ---------------------------------------------------------------- CRLF
 for f in ALL_FILES:
     raw = io.open(os.path.join(ROOT, f), "rb").read()
+    ncrlf = raw.count(b"\r\n")
+    nlf = raw.count(b"\n")
     ncrlf = raw.count(b"\r\n")
     nlf = raw.count(b"\n")
     check("CRLF preserved in %s" % f, ncrlf == nlf, "%d CRLF vs %d LF" % (ncrlf, nlf))

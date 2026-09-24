@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   OttoDefines.mqh |
-//|             OTTO EA v5.31 — 28-Pair Institutional Master Build |
+//|             OTTO EA v5.32 — 28-Pair Institutional Master Build |
 //|                 Central Definitions / Enums / Input Parameters    |
 //|         Exact MQL5 port of Pine Script "prop_guard_tester.pine"   |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.31"
-#property description "OTTO v5.31 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
+#property version   "5.32"
+#property description "OTTO v5.32 — Goat Funded Trader (GFT) Master Build (Wick1+Wick2 | Separation | Front-Run | Near-Miss | Stale Vetoes | Currency-Vector Consensus | 4-Pair Quorum Guard)"
 
 #ifndef __OTTO_DEFINES__
 #define __OTTO_DEFINES__
@@ -61,7 +61,15 @@ enum ENUM_VETO_REASON
    // a newly forming block) opposes the global currency-vector consensus beyond
    // InpConsensusVetoThreshold. Distinct from the geographic block vetoes above,
    // which are per-chart; this one is portfolio-wide.
-   VETO_CORRELATION         // Opposes the 8-currency vector consensus
+   VETO_CORRELATION,        // Opposes the 8-currency vector consensus
+   // v5.32: MT5 pending-price boundary guard. Set when a block's entry
+   // price has drifted to the WRONG side of the live spread (a BUY LIMIT
+   // at/above the Ask, or a SELL LIMIT at/below the Bid), where MT5 would
+   // answer OrderSend() with TRADE_RETCODE_INVALID_PRICE (10015). Unlike
+   // the geographic vetoes above this one is not a market judgement -- it
+   // is a protocol precondition. The block is latched dead rather than
+   // retried every tick; see COttoOrderManager::PlaceLimitOrder.
+   VETO_PRICE_INVALID       // Entry past live market (limit would reject)
   };
 
 // Pine entry_style: "Midpoint" or "Front Edge"
@@ -305,20 +313,29 @@ input double   SafetyMaxFloatingLoss = 1.0;   // Hard breach: close all + halt i
 // balance on init so a restart cannot carry a finished session's budget.
 
 input group "══════════════════════════════════════════════════"
-input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.31"
+input group "  [9] CURRENCY VECTOR & AFFINITY ENGINE — v5.32"
 input group "══════════════════════════════════════════════════"
+// v5.32 ROLLBACK: the three strict engines in this group remain compiled
+// and user-enableable, but all three now DEFAULT OFF. On live feeds the
+// 8-currency vector consensus, the opposing-pending cancellation and the
+// 4-pair quorum guard repeatedly suppressed valid setups, so the shipped
+// default is once again the loose classic model: open-position correlation
+// vetoes only (COttoCorrelationFilter::IsTradeVetoed ->
+// ScanPositionsForVeto) plus the HiveMind weighted-bias tie-breaker, which
+// was never gated by these inputs. Flip a field back on to re-arm it.
 // FIX (v5.26): portfolio-wide consensus engine ported from the theoretical
 // Base/Quote + Regional Affinity model. Additive to the per-chart
 // GetCorrelationScore() ladder, which still drives the TS_Bias_* hive mind.
-input bool     InpEnableVectorEngine = true;   // Enable currency-vector consensus layer
+input bool     InpEnableVectorEngine = false;  // Enable currency-vector consensus layer
 input double   InpConsensusVetoThreshold = 50.0; // |consensus| % to veto/cancel opposing orders
 input bool     InpUseExternalAnchors = true;   // Factor untraded DXY / XAUUSD macro anchors
 input int      InpAnchorTF           = PERIOD_M15; // Anchor candle timeframe (M15 default)
-input bool     InpCancelOpposingPendings = true; // Cancel resting pendings against consensus
+input bool     InpCancelOpposingPendings = false; // Cancel resting pendings against consensus
 
 input group "══════════════════════════════════════════════════"
 input group "  [10] LIVE QUORUM CONTRADICTION GUARD"
 input group "══════════════════════════════════════════════════"
+// v5.32 ROLLBACK: default OFF (see the [9] group header note).
 // v5.27: LIVE 4-PAIR QUORUM CONTRADICTION GUARD.
 // Measures whether a currency is driven by a quorum of its peer pairs on
 // InpQuorumTimeframe, then liquidates / cancels anything positioned against
@@ -334,7 +351,7 @@ input group "══════════════════════�
 // RESTING LIMITS ARE NOT GATED: they are cancelled on the quorum verdict
 // alone, because protecting margin ahead of a fill matters more than
 // confirmation latency.
-input bool     InpEnableQuorumGuard      = true;   // Master toggle for 4-pair quorum
+input bool     InpEnableQuorumGuard      = false;  // Master toggle for 4-pair quorum
 input bool     InpQuorumCloseActiveTrade = false;  // Close active trades if quorum opposes
 input bool     InpQuorumCancelLimits     = true;   // Cancel resting limits if quorum opposes
 input int      InpQuorumMinPairs         = 4;      // Min agreeing peer pairs (4 of 7)

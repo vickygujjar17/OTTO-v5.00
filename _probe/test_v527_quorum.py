@@ -16,7 +16,7 @@ Pins the behaviour that cannot be exercised by the MQL5 compiler gate:
   9. Trade manager: filter injected, open-age gate, one-shot latch.
  10. Order manager: sweep exists, sets VETO_CORRELATION, is reachable.
  11. otto.mq5 wires the filter into Initialize and calls the sweep.
- 12. Version stamp 5.31 present.
+ 12. Version stamp 5.32 present.
  13. v5.30: the flat->book transition calls ArmQuorumGuard so the active-trade
      guard fires once per BASKET, not once per EA session.
 
@@ -78,8 +78,8 @@ def body(text, sig):
 
 
 # ---------------------------------------------------------------- 1
-check("input InpEnableQuorumGuard defaults true",
-      re.search(r"input bool\s+InpEnableQuorumGuard\s*=\s*true", DEFS_T) is not None)
+check("input InpEnableQuorumGuard defaults false (v5.32 rollback)",
+      re.search(r"input bool\s+InpEnableQuorumGuard\s*=\s*false", DEFS_T) is not None)
 check("input InpQuorumCloseActiveTrade defaults false (demo-first)",
       re.search(r"input bool\s+InpQuorumCloseActiveTrade\s*=\s*false", DEFS_T) is not None)
 check("input InpQuorumCancelLimits defaults true",
@@ -249,10 +249,11 @@ check("quorum sweep runs after the consensus sweep",
 for f in ALL_FILES:
     p = os.path.join(ROOT, f)
     txt = read(p)
-    check("version 5.31 stamped in %s" % f, '5.31' in txt)
+    check("version 5.32 stamped in %s" % f, '5.32' in txt)
 check("no stale 5.27/5.28/5.29/5.30 property stamp in OttoDefines",
       'version   "5.27"' not in DEFS_T and 'version   "5.28"' not in DEFS_T
-      and 'version   "5.29"' not in DEFS_T and 'version   "5.30"' not in DEFS_T)
+      and 'version   "5.29"' not in DEFS_T and 'version   "5.30"' not in DEFS_T
+      and 'version   "5.31"' not in DEFS_T)
 
 
 # ---------------------------------------------------------------- CRLF

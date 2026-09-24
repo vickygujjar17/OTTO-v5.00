@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                                       OttoEA.mq5 |
 //|                    OTTO — Goat Funded Trader (GFT) Master Build    |
-//|                    Pine Script Master Build Port (v5.30)            |
+//|                    Pine Script Master Build Port (v5.31)            |
 //|                                    Institutional / Real-Money    |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.30"
+#property version   "5.31"
 #property description "OTTO EA â€” Goat Funded Trader (GFT) Master Build"
 #property description "Separation | Sizing | Front-Run | Near-Miss | Stale vetoes"
 #property description "Modules: News Shield | Risk | Block Manager | Order Mgmt | Trail"
@@ -300,7 +300,7 @@ int OnInit(void)
    g_symbol = _Symbol;
 
    Print("==============================================================");
-   Print("  OTTO EA v5.30 — 28-Pair Institutional Master Build — INITIALIZING");
+   Print("  OTTO EA v5.31 — 28-Pair Institutional Master Build — INITIALIZING");
    Print("  Symbol: ", g_symbol, " | Magic: ", MagicNumber);
    Print("==============================================================");
 
@@ -720,6 +720,14 @@ void OnTick(void)
 
    g_tickCount++;
    CheckDailyReset();
+
+   // v5.31: open a fresh per-tick deletion cycle. Placed here, ahead of every
+   // sweeper (including the CancelOrdersForInvalidBlocks() call inside the
+   // IsNewBar() block below), because MT5 does not refresh its order list
+   // within a single event handler: two sweeps would otherwise both dispatch
+   // TRADE_ACTION_REMOVE for the same ticket and the second draw an
+   // "[Invalid request]" rejection.
+   g_orderManager.BeginOrderCycle();
 
    // ================================================================
    // STEP 0: PROP FIRM SAFETY CHECKS (highest priority)

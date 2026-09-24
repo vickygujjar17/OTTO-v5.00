@@ -32,7 +32,7 @@ TM = os.path.join(ROOT, "COttoTradeManager.mqh")
 OM = os.path.join(ROOT, "COttoOrderManager.mqh")
 DEFS = os.path.join(ROOT, "OttoDefines.mqh")
 
-# The 10 files that must all carry the 5.28 stamp.
+# The 10 files that must all carry the 5.31 stamp.
 ALL_FILES = ["otto.mq5", "COttoOrderManager.mqh", "COttoTradeManager.mqh",
              "COttoRiskManager.mqh", "COttoBlockManager.mqh", "COttoJournal.mqh",
              "COttoNewsFilter.mqh", "COttoCorrelationFilter.mqh",
@@ -370,19 +370,20 @@ check("exhaustive combo sweep never exceeds 31", worst <= 31, "max=%d" % worst)
 # 10. Version stamps
 # ----------------------------------------------------------------------
 missing = [f for f in ALL_FILES
-           if '#property version   "5.30"' not in read(os.path.join(ROOT, f))]
-check("all 10 files stamp 5.30", not missing, "missing: %s" % ", ".join(missing))
+           if '#property version   "5.31"' not in read(os.path.join(ROOT, f))]
+check("all 10 files stamp 5.31", not missing, "missing: %s" % ", ".join(missing))
 
 stale = [f for f in ALL_FILES
          if '#property version   "5.27"' in read(os.path.join(ROOT, f))
          or '#property version   "5.28"' in read(os.path.join(ROOT, f))
-         or '#property version   "5.29"' in read(os.path.join(ROOT, f))]
-check("no 5.27/5.28/5.29 property stamp survives", not stale, "stale: %s" % ", ".join(stale))
+         or '#property version   "5.29"' in read(os.path.join(ROOT, f))
+         or '#property version   "5.30"' in read(os.path.join(ROOT, f))]
+check("no 5.27/5.28/5.29/5.30 property stamp survives", not stale, "stale: %s" % ", ".join(stale))
 
-check("OttoDefines banner names v5.30", "OTTO EA v5.30" in DEFS_T)
+check("OttoDefines banner names v5.31", "OTTO EA v5.31" in DEFS_T)
 
-check("OttoDefines description names v5.30",
-      '#property description "OTTO v5.30' in DEFS_T)
+check("OttoDefines description names v5.31",
+      '#property description "OTTO v5.31' in DEFS_T)
 
 
 

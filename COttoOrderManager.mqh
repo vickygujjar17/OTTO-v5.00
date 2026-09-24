@@ -4,7 +4,7 @@
 //|              OTTO EA — exact Pine v4.70 execution port           |
 //+------------------------------------------------------------------+
 #property copyright "OTTO EA - Goat Funded Trader (GFT) Master Build"
-#property version   "5.30"
+#property version   "5.31"
 
 #ifndef __OTTO_ORDER_MANAGER__
 #define __OTTO_ORDER_MANAGER__
@@ -40,6 +40,13 @@ private:
    // --- Pending limit order tracking ---
    ulong                   m_pendingLimitTickets[];
    int                     m_pendingLimitCount;
+
+   // --- v5.31 per-cycle deletion ledger ---
+   // Tickets THIS instance has already dispatched a TRADE_ACTION_REMOVE for
+   // during the current OnTick cycle. See SafeDeleteOrder() for why the scope
+   // has to be the cycle rather than the block map.
+   ulong                   m_deletedThisCycle[];
+   int                     m_deletedThisCycleCount;
 
    // --- Statistics ---
    int                     m_ordersPlaced;
@@ -967,6 +974,65 @@ private:
 
 
    //+------------------------------------------------------------------+
+   //| v5.31 — PER-CYCLE DELETION LEDGER                                |
+   //|                                                                  |
+   //| MT5 does not refresh OrdersTotal()/OrderSelect() until the       |
+   //| current event handler returns. Two sweeps therefore see the SAME |
+   //| ticket in their own stale snapshot, each dispatches a            |
+   //| TRADE_ACTION_REMOVE, and the second is answered with             |
+   //| "[Invalid request]" (retcode 10013 / error 4756) — a rejection   |
+   //| booked against an order that was already gone.                   |
+   //|                                                                  |
+   //| Cycle scope (one OnTick) rather than an order-presence test is   |
+   //| deliberate: OrderSelect still reports the deleted ticket as      |
+   //| PLACED within the same handler, so state re-validation cannot    |
+   //| detect the duplicate.                                            |
+   //|                                                                  |
+   //| Deliberately NOT keyed on the block array. Blocks are in-memory  |
+   //| only (no GlobalVariable/File persistence in COttoBlockManager or |
+   //| COttoOrderManager), so after a restart every live ticket reads   |
+   //| as "unmapped". A mapping-based guard would silently disable the  |
+   //| cancellation of genuine broker orphans — the cleanup the v5.26   |
+   //| header explicitly requires us to keep performing.                |
+   //+------------------------------------------------------------------+
+   bool              WasTicketDeletedThisCycle(ulong ticket)
+     {
+      for(int i = 0; i < m_deletedThisCycleCount; i++)
+         if(m_deletedThisCycle[i] == ticket) return true;
+      return false;
+     }
+
+   void              MarkTicketDeletedThisCycle(ulong ticket)
+     {
+      if(ticket <= 0) return;
+      if(WasTicketDeletedThisCycle(ticket)) return;
+      ArrayResize(m_deletedThisCycle, m_deletedThisCycleCount + 1, 16);
+      m_deletedThisCycle[m_deletedThisCycleCount++] = ticket;
+     }
+
+   //+------------------------------------------------------------------+
+   //| v5.31 — COLLISION-PROOF DELETE                                   |
+   //|                                                                  |
+   //| Refuses to re-dispatch a ticket a sibling sweep already removed   |
+   //| earlier in this cycle, which is the actual source of the         |
+   //| "[Invalid request] buy 0" rejection. Every same-tick deletion     |
+   //| site routes through here.                                        |
+   //|                                                                  |
+   //| An UNARMED cycle (m_deletedThisCycleCount == 0) deletes           |
+   //| unconditionally, so a pending whose block was never rebuilt after |
+   //| a restart — a genuine broker orphan — stays cancellable.          |
+   //+------------------------------------------------------------------+
+   bool                    SafeDeleteOrder(ulong ticket)
+     {
+      if(ticket <= 0) return false;
+      if(WasTicketDeletedThisCycle(ticket)) return false;
+      if(!DeleteOrder(ticket)) return false;
+      MarkTicketDeletedThisCycle(ticket);
+      return true;
+     }
+
+
+   //+------------------------------------------------------------------+
    //| Reversal Phase 1: close the current position                    |
    //+------------------------------------------------------------------+
    bool                    InitiateReversal(ulong ticket, SSniperBlock &targetBlock)
@@ -1382,6 +1448,8 @@ public:
       m_hasActiveTrade    = false;
       m_activeDirection   = DIR_NONE;
       m_pendingLimitCount = 0;
+      m_deletedThisCycleCount = 0;
+      ArrayResize(m_deletedThisCycle, 0, 16);
       m_ordersPlaced      = 0;
       m_ordersFilled      = 0;
       m_ordersRejected    = 0;
@@ -1404,7 +1472,11 @@ public:
 
      }
 
-                    ~COttoOrderManager(void) { ArrayFree(m_pendingLimitTickets); }
+                    ~COttoOrderManager(void)
+      {
+       ArrayFree(m_pendingLimitTickets);
+       ArrayFree(m_deletedThisCycle);
+      }
 
    //+------------------------------------------------------------------+
    //| Initialize                                                        |
@@ -1418,6 +1490,7 @@ public:
       m_riskManager       = riskManager;
       m_blockManager      = blockManager;
       m_correlationFilter = correlationFilter;
+      m_deletedThisCycleCount = 0;   // v5.31: cold-start the deletion ledger
       SyncActiveTrade();
       if(EnableLogging)
          Print("[OrderManager] Initialized for ", m_symbol, " | Magic: ", MagicNumber);
@@ -1581,7 +1654,11 @@ public:
 
          if(IsBlockOrderAlive(blocks[i].limitOrderTicket))
            {
-             if(DeleteOrder(blocks[i].limitOrderTicket))
+             // v5.31: routed through the per-cycle ledger. This sweep runs
+             // three times per tick (otto.mq5 STEP 1 / STEP 2 / STEP 3) and
+             // the earlier invocations can leave the order list stale for the
+             // later ones.
+             if(SafeDeleteOrder(blocks[i].limitOrderTicket))
                {
                 if(EnableLogging)
                    Print("[OrderManager] Cancelled order ", blocks[i].limitOrderTicket,
@@ -1672,7 +1749,11 @@ public:
          string reason = "";
          if(!m_correlationFilter.IsPendingOpposingQuorum(sym, qDir, reason)) continue;
 
-         if(DeleteOrder(ticket))
+         // v5.31: SafeDeleteOrder() — the consensus sweep may already have
+         // removed this ticket on this tick, in which case MT5's order list
+         // has not refreshed yet and a second REMOVE returns "[Invalid
+         // request] buy 0". Repeat deletes are suppressed per cycle.
+         if(SafeDeleteOrder(ticket))
            {
             if(EnableLogging)
                Print("[OrderManager] QUORUM CANCEL: ticket ", ticket, " ", sym,
@@ -1718,7 +1799,8 @@ public:
          string sym = OrderGetString(ORDER_SYMBOL);
          if(!m_correlationFilter.IsConsensusOpposed(sym, dir)) continue;
 
-         if(DeleteOrder(ticket))
+         // v5.31: SafeDeleteOrder() — see the ledger note at the definition.
+         if(SafeDeleteOrder(ticket))
            {
             if(EnableLogging)
                Print("[OrderManager] VECTOR CANCEL: ticket ", ticket, " ", sym,
@@ -1762,7 +1844,7 @@ public:
             ENUM_ORDER_TYPE oType = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
             if((m_activeDirection == DIR_LONG && oType == ORDER_TYPE_BUY_LIMIT) ||
                (m_activeDirection == DIR_SHORT && oType == ORDER_TYPE_SELL_LIMIT))
-               DeleteOrder(ticket);
+               SafeDeleteOrder(ticket);   // v5.31: per-cycle collision guard
            }
         }
      }
@@ -1777,7 +1859,7 @@ public:
         {
          ulong ticket = GetMyPendingOrderByIndex(i);
          if(ticket > 0)
-            DeleteOrder(ticket);
+            SafeDeleteOrder(ticket);   // v5.31: per-cycle collision guard
         }
      }
 
@@ -1787,6 +1869,13 @@ public:
    int               CountMyPending(void) { return CountMyPendingOrders(); }
    bool              ForceClose(ulong ticket)  { return ClosePosition(ticket); }
    bool              ModifySL(ulong ticket, double newSL) { return ModifyStopLoss(ticket, newSL); }
+
+   //+------------------------------------------------------------------+
+   //| v5.31 — opens a fresh per-cycle deletion ledger. Called ONCE per  |
+   //| OnTick, before any sweep, so that a ticket removed by one sweeper |
+   //| is never re-dispatched by a later one on the same tick.           |
+   //+------------------------------------------------------------------+
+   void              BeginOrderCycle(void)      { m_deletedThisCycleCount = 0; }
 
 
    //+------------------------------------------------------------------+
